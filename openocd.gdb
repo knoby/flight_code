@@ -28,5 +28,7 @@ monitor arm semihosting enable
 
 load
 
+tui enable
+
 # start the process but immediately halt the processor
-# stepi
+stepi
