@@ -10,64 +10,76 @@ use cortex_m_semihosting::{hprintln};
 use stm32f103xx_hal::{
     prelude::*,
     device,
-	timer::Timer,
+    serial::Serial,
+    gpio,
 };
-use rtfm::app;
+
 use nb::block;
+
+use rtfm::{app, Instant};
+
+const PERIOD: u32 = 64_000_000;
+
 
 #[app(device = stm32f103xx_hal::device)]
 const APP: () = {
 
-	static mut LD2: stm32f103xx_hal::gpio::gpioa::PA5<
-		stm32f103xx_hal::gpio::Output<
-			stm32f103xx_hal::gpio::PushPull>> = ();
-
-	static mut timer: Timer<stm32f103xx_hal::stm32f103xx::TIM1> = ();
+	//Resourcen
+	static mut LD2: gpio::gpioa::PA5<gpio::Output<gpio::PushPull>> = ();
 
 
-    #[init]
+    #[init(schedule = [hightask])]
     fn init() {
+    	hprintln!("Init");
 
-        hprintln!("init").unwrap();
-
-        // Cortex-M peripherals
-        let core: rtfm::Peripherals = core;
+     	// Cortex-M peripherals
+        let _core: rtfm::Peripherals = core;
 
         // Device specific peripherals
         let device: device::Peripherals = device;
 
-		let mut rcc = device.RCC.constrain();
-		let mut gpioa = device.GPIOA.split(&mut rcc.apb2);		
-		
+        //Freeze clock frequencies
+        let mut flash = device.FLASH.constrain();
+        let mut rcc = device.RCC.constrain();
+        let clocks = rcc.cfgr
+        	.sysclk(64.mhz())
+        	.pclk1(32.mhz())
+        	.pclk2(64.mhz())
+        	.freeze(&mut flash.acr);
 
- 		let mut flash = device.FLASH.constrain();
-		let clocks = rcc.cfgr
-			.sysclk(64.mhz())
-			.pclk1(32.mhz())
-			.pclk2(32.mhz())
-			.freeze(&mut flash.acr);
-
-		timer = Timer::tim1( device.TIM1, 1.hz(), clocks, &mut rcc.apb2);
-		LD2 = gpioa.pa5.into_push_pull_output(&mut gpioa.crl);
-
-
-    }
-
-    #[idle(resources = [LD2, timer])]
-    fn idle() -> ! {
-
-        hprintln!("idle").unwrap();
-
+        //Configuration of PA5 as output
+        let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         
 
+    	//Start schedulinig of high prio task
+    	let now = Instant::now();
+    	schedule.hightask(now+PERIOD.cycles()).unwrap();       
+
+    	//Assign late resources
+    	LD2 = gpioa.pa5.into_push_pull_output(&mut gpioa.crl);
+    }
+
+
+    #[idle]
+    fn idle() -> ! {
+    	hprintln!("Idle");
         loop {
-        	resources.LD2.set_high();
-        	resources.timer.start(20.hz());
-        	block!(resources.timer.wait()).unwrap();
-        	resources.LD2.set_low();
-        	resources.timer.start(10.hz());
-        	block!(resources.timer.wait()).unwrap();
         }
     }
+
+
+    #[task(schedule = [hightask], resources = [LD2])]
+    fn hightask() {
+		hprintln!("HighTask");
+		schedule.hightask(scheduled+PERIOD.cycles()).unwrap();
+		resources.LD2.toggle();
+    }
+
+
+    extern "C" {
+    	//fn EXTI0();
+    	fn USART1();
+    }
+
 
 };
