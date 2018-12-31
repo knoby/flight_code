@@ -10,11 +10,9 @@ use cortex_m_semihosting::{hprintln};
 use stm32f103xx_hal::{
     prelude::*,
     device,
-    serial::Serial,
     gpio,
 };
 
-use nb::block;
 
 use rtfm::{app, Instant};
 
@@ -26,11 +24,12 @@ const APP: () = {
 
 	//Resourcen
 	static mut LD2: gpio::gpioa::PA5<gpio::Output<gpio::PushPull>> = ();
+	static mut PB: gpio::gpioc::PC13<gpio::Input<gpio::Floating>> = ();
 
 
     #[init(schedule = [hightask])]
     fn init() {
-    	hprintln!("Init");
+    	hprintln!("Init").unwrap();
 
      	// Cortex-M peripherals
         let _core: rtfm::Peripherals = core;
@@ -41,38 +40,47 @@ const APP: () = {
         //Freeze clock frequencies
         let mut flash = device.FLASH.constrain();
         let mut rcc = device.RCC.constrain();
-        let clocks = rcc.cfgr
+        let _clocks = rcc.cfgr
         	.sysclk(64.mhz())
         	.pclk1(32.mhz())
         	.pclk2(64.mhz())
         	.freeze(&mut flash.acr);
 
-        //Configuration of PA5 as output
+        //Configuration of PA5 as output and PC13 as Input
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
-        
+        let mut gpioc = device.GPIOC.split(&mut rcc.apb2);      
 
-    	//Start schedulinig of high prio task
-    	let now = Instant::now();
-    	schedule.hightask(now+PERIOD.cycles()).unwrap();       
+        //Schedule the Hight Task
+        let now = Instant::now();
+        schedule.hightask(now+PERIOD.cycles()).unwrap();
+
 
     	//Assign late resources
     	LD2 = gpioa.pa5.into_push_pull_output(&mut gpioa.crl);
+    	PB = gpioc.pc13.into_floating_input(&mut gpioc.crh);
+    	
     }
 
 
-    #[idle]
+    #[idle(resources = [LD2, PB])]
     fn idle() -> ! {
-    	hprintln!("Idle");
+    	hprintln!("Idle").unwrap();
+
         loop {
+        	if resources.PB.is_high() {
+        		resources.LD2.lock(|led| led.set_high());
+        	} else {
+        		resources.LD2.lock(|led| led.set_low());
+        	}
         }
     }
 
 
     #[task(schedule = [hightask], resources = [LD2])]
     fn hightask() {
-		hprintln!("HighTask");
-		schedule.hightask(scheduled+PERIOD.cycles()).unwrap();
+		hprintln!("HighTask").unwrap();
 		resources.LD2.toggle();
+		schedule.hightask(scheduled+PERIOD.cycles()).unwrap();
     }
 
 
