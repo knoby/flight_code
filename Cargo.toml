@@ -2,7 +2,7 @@
 authors = ["knoby <maximilian.brinkmann@gmx.net>"]
 edition = "2018"
 readme = "README.md"
-name = "app"
+name = "cortex_app"
 version = "0.1.0"
 
 [dependencies]
@@ -12,11 +12,15 @@ cortex-m-semihosting = "0.3.2"
 panic-halt = "0.2.0"
 panic-semihosting = "*"
 nb = "*"
+heapless = "0.4.1"
 
-[dependencies.stm32f103xx-hal]
-version = "*"
-features = ["rt"]
-git = "https://github.com/japaric/stm32f103xx-hal"
+[dependencies.stm32f1]
+version = "0.5.0"
+features = ["stm32f103", "rt"]
+
+[dependencies.stm32f1xx-hal]
+version = "0.1.1"
+features = ["rt", "stm32f103"]
 
 [dependencies.cortex-m-rtfm]
 version = "0.4.0"
@@ -24,7 +28,7 @@ features = ["timer-queue"]
 
 # this lets you use `cargo fix`!
 [[bin]]
-name = "app"
+name = "cortex_app"
 test = false
 bench = false
 
