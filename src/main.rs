@@ -140,7 +140,7 @@ const APP: () = {
     /// Interrupt for reading data from serial interface
     #[interrupt(priority = 10, resources = [RX, PSerialRead])]
     fn USART2() {
-        //Read the recived Byte from the interface and push it in the
+        //Read the recived Byte from the interface and push it in the queue
         if let Ok(byte) = resources.RX.read() {
             resources.PSerialRead.enqueue(Some(byte)).is_err();
         } else {
