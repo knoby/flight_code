@@ -22,22 +22,35 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
-use rtfm::app;
+// Runtime Imports
+use rtfm::{app, Instant};
 
 #[app(device = stm32f1xx_hal::stm32)]
 const APP: () = {
     //Resourcen
-    static mut LD2: gpio::gpioa::PA5<gpio::Output<gpio::PushPull>> = ();
-    static mut PB: gpio::gpioc::PC13<gpio::Input<gpio::Floating>> = ();
-    static mut TX: stm32f1xx_hal::serial::Tx<stm32f1xx_hal::stm32::USART2> = ();
-    static mut RX: stm32f1xx_hal::serial::Rx<stm32f1xx_hal::stm32::USART2> = ();
-    static mut P: Producer<'static, Option<u8>, U8> = ();
-    static mut C: Consumer<'static, Option<u8>, U8> = ();
 
-    #[init]
+    /// On Board LED
+    static mut LED: gpio::gpioa::PA5<gpio::Output<gpio::PushPull>> = ();
+
+    /// Transmission Pin for Serial Interface
+    static mut TX: stm32f1xx_hal::serial::Tx<stm32f1xx_hal::stm32::USART2> = ();
+    /// Resive Pin for Serial Interface
+    static mut RX: stm32f1xx_hal::serial::Rx<stm32f1xx_hal::stm32::USART2> = ();
+
+    /// Que for passing data from Serial Interrupt to Idle Task
+    static mut PSerialRead: Producer<'static, Option<u8>, U4> = ();
+    static mut CSerialRead: Consumer<'static, Option<u8>, U4> = ();
+
+    /// Que for passing target positions from Idel Task to Periodic Task
+    static mut PTargetPoint: Producer<'static, [f32; 3], U4> = ();
+    static mut CTargetPoint: Consumer<'static, [f32; 3], U4> = ();
+
+    #[init(schedule = [periodic_task])]
     fn init() {
-        //Create Ringbuffer at beginning of init function --> error if not
-        static mut Q: Option<Queue<Option<u8>, U8>> = None;
+        //Create Ringbuffer at beginning of init function
+        //TODO: check WHY
+        static mut QSerialRead: Option<Queue<Option<u8>, U4>> = None;
+        static mut QTargetPoint: Option<Queue<[f32; 3], U4>> = None;
 
         // Cortex-M peripherals
         let _core: rtfm::Peripherals = core;
@@ -53,15 +66,12 @@ const APP: () = {
         let clocks = rcc
             .cfgr
             .sysclk(64.mhz())
-            .pclk1(32.mhz())
+            .pclk1(32.mhz()) //TODO: Fix bug in hal crate to use different clocks for pclk1/pclk2
             .pclk2(32.mhz())
             .freeze(&mut flash.acr);
 
-        //Configuration of PA5 as output and PC13 as Input
-        let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
-        let mut gpioc = device.GPIOC.split(&mut rcc.apb2);
-
         //Configuration of the Pins TX and RX for UART2
+        let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let tx = gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl);
         let rx = gpioa.pa3.into_floating_input(&mut gpioa.crl);
 
@@ -79,44 +89,67 @@ const APP: () = {
         let (tx, rx) = serial.split();
 
         //Create que for serial read
-        *Q = Some(Queue::new());
-        let (p, c) = Q.as_mut().unwrap().split();
+        *QSerialRead = Some(Queue::new());
+        let (ps, cs) = QSerialRead.as_mut().unwrap().split();
+
+        //Create que for target points
+        *QTargetPoint = Some(Queue::new());
+        let (pt, ct) = QTargetPoint.as_mut().unwrap().split();
+
+        // Schedule Periodic Task
+        schedule
+            .periodic_task(Instant::now() + 32_000_000.cycles())
+            .unwrap();
 
         //Assign late resources
-        LD2 = gpioa.pa5.into_push_pull_output(&mut gpioa.crl);
-        PB = gpioc.pc13.into_floating_input(&mut gpioc.crh);
+        LED = gpioa.pa5.into_push_pull_output(&mut gpioa.crl);
         TX = tx;
         RX = rx;
 
-        P = p;
-        C = c;
+        PSerialRead = ps;
+        CSerialRead = cs;
+
+        PTargetPoint = pt;
+        CTargetPoint = ct;
     }
 
-    #[idle(resources = [C, TX])]
+    /// Idle Task for non critical jobs
+    #[idle(resources = [CSerialRead, PTargetPoint, TX])]
     fn idle() -> ! {
         loop {
-            if let Some(item) = resources.C.dequeue() {
+            if let Some(item) = resources.CSerialRead.dequeue() {
                 if let Some(byte) = item {
                     nb::block!(resources.TX.write(byte)).unwrap();
-                } else {
-                    nb::block!(resources.TX.write(0x45)).unwrap();
-                    nb::block!(resources.TX.write(0x52)).unwrap();
-                    nb::block!(resources.TX.write(0x52)).unwrap();
-                    nb::block!(resources.TX.write(0x4F)).unwrap();
-                    nb::block!(resources.TX.write(0x52)).unwrap();
-                    nb::block!(resources.TX.write(0x21)).unwrap();
                 }
             }
         }
     }
 
-    #[interrupt(priority = 10, resources = [RX, P])]
+    /// Periodic task for real time critical things
+    #[task(priority = 5 , resources = [CTargetPoint, LED], schedule = [periodic_task])]
+    fn periodic_task() {
+        //Toggle LED
+        resources.LED.toggle();
+
+        //Rescedule task
+        schedule
+            .periodic_task(scheduled + 32_000_000.cycles())
+            .unwrap();
+    }
+
+    /// Interrupt for reading data from serial interface
+    #[interrupt(priority = 10, resources = [RX, PSerialRead])]
     fn USART2() {
         //Read the recived Byte from the interface and push it in the
         if let Ok(byte) = resources.RX.read() {
-            resources.P.enqueue(Some(byte)).is_err();
+            resources.PSerialRead.enqueue(Some(byte)).is_err();
         } else {
-            resources.P.enqueue(None).is_err();
+            resources.PSerialRead.enqueue(None).is_err();
         }
+    }
+
+    // Interrupt handlers used to dispatch software tasks
+    extern "C" {
+        fn EXTI0();
     }
 };
