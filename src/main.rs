@@ -2,10 +2,10 @@
 #![no_main]
 #![no_std]
 
+// Define Panic behaivior
 extern crate panic_semihosting;
 
-use nb;
-
+// Used traits from the HAL crate
 use stm32f1xx_hal::{
     gpio,
     prelude::*,
@@ -13,8 +13,10 @@ use stm32f1xx_hal::{
     stm32,
 };
 
-use cortex_m_semihosting::hprintln;
+// Asynchronous API
+use nb;
 
+// Message Passing between Idle, Interrupt and Periodic
 use heapless::{
     consts::*,
     spsc::{Consumer, Producer, Queue},
