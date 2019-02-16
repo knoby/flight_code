@@ -23,7 +23,7 @@ version = "0.1.1"
 features = ["rt", "stm32f103"]
 
 [dependencies.cortex-m-rtfm]
-version = "0.4.0"
+version = "0.4.1"
 features = ["timer-queue"]
 
 # this lets you use `cargo fix`!
