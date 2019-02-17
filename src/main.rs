@@ -116,10 +116,38 @@ const APP: () = {
     /// Idle Task for non critical jobs
     #[idle(resources = [CSerialRead, PTargetPoint, TX])]
     fn idle() -> ! {
+        // Buffer for message evaluation
+        let mut in_buffer = [0_u8; 32];
+        let mut rec_len = 0;
+        let mut msg = [0_u8; 32];
+
         loop {
             if let Some(item) = resources.CSerialRead.dequeue() {
-                if let Some(byte) = item {
-                    nb::block!(resources.TX.write(byte)).unwrap();
+                // Item in Que
+                match item {
+                    Some(rc_framing::framing::END) => {
+                        if let Ok(_msg_len) =
+                            rc_framing::framing::decode(&in_buffer[..rec_len], &mut msg)
+                        {
+                            nb::block!(resources.TX.write(b"O"[0])).unwrap();
+                            nb::block!(resources.TX.write(b"k"[0])).unwrap();
+                            nb::block!(resources.TX.write(15)).unwrap();
+                        } else if rec_len > 0 {
+                            nb::block!(resources.TX.write(b"E"[0])).unwrap();
+                            nb::block!(resources.TX.write(b"r"[0])).unwrap();
+                            nb::block!(resources.TX.write(b"r"[0])).unwrap();
+                            nb::block!(resources.TX.write(15)).unwrap();
+                        };
+                        rec_len = 0;
+                    }
+                    Some(byte) => {
+                        in_buffer[rec_len] = byte;
+                        rec_len += 1;
+                    }
+                    None => {
+                        //overflow in input,
+                        rec_len = 0;
+                    }
                 }
             }
         }
