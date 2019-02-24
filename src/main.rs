@@ -22,6 +22,8 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
+mod hardware;
+
 // Runtime Imports
 use rtfm::{app, Instant};
 
@@ -44,6 +46,9 @@ const APP: () = {
     /// Que for passing target positions from Idel Task to Periodic Task
     static mut PTargetPoint: Producer<'static, [f32; 3], U4> = ();
     static mut CTargetPoint: Consumer<'static, [f32; 3], U4> = ();
+
+    // Motor Access
+    static mut Motor: hardware::Motors2x2 = ();
 
     #[init(schedule = [periodic_task])]
     fn init() {
@@ -96,6 +101,21 @@ const APP: () = {
         *QTargetPoint = Some(Queue::new());
         let (pt, ct) = QTargetPoint.as_mut().unwrap().split();
 
+        // Create Pins for the Motor PWM output
+        let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
+        let c1 = gpiob.pb6.into_alternate_push_pull(&mut gpiob.crl);
+        let c2 = gpiob.pb7.into_alternate_push_pull(&mut gpiob.crl);
+        let c3 = gpiob.pb8.into_alternate_push_pull(&mut gpiob.crh);
+        let c4 = gpiob.pb9.into_alternate_push_pull(&mut gpiob.crh);
+
+        let motor_pwm = device.TIM4.pwm(
+            (c1, c2, c3, c4),
+            &mut afio.mapr,
+            1.khz(),
+            clocks,
+            &mut rcc.apb1,
+        );
+
         // Schedule Periodic Task
         schedule
             .periodic_task(Instant::now() + 32_000_000.cycles())
@@ -111,6 +131,8 @@ const APP: () = {
 
         PTargetPoint = pt;
         CTargetPoint = ct;
+
+        Motor = hardware::Motors2x2 { motor_pwm };
     }
 
     /// Idle Task for non critical jobs
