@@ -6,13 +6,12 @@ name = "cortex_app"
 version = "0.1.0"
 
 [dependencies]
-cortex-m = "*"
-cortex-m-rt = "*"
-cortex-m-semihosting = "0.3.2"
+cortex-m = "0.5.8"
 panic-halt = "0.2.0"
-panic-semihosting = "*"
-nb = "*"
-heapless = "0.4.1"
+panic-semihosting = "0.5.1"
+nb = "0.1.1"
+heapless = "0.4.2"
+lsm303dlhc = "0.2.0"
 
 [dependencies.rc_framing]
 path = "../rc_framing"

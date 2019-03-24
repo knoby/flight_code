@@ -3,10 +3,10 @@
 #![allow(dead_code)]
 
 use core::ops;
-use hal::prelude::*;
 
 use hal::gpio::{MediumSpeed, Output, PullNone, PushPull};
 use hal::gpio::{PEx, PE10, PE11, PE12, PE13, PE14, PE15, PE8, PE9};
+use hal::prelude::*;
 
 ///  North LED
 pub type LD3 = PE9<PullNone, Output<PushPull, MediumSpeed>>;

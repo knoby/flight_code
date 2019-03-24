@@ -17,7 +17,8 @@ use heapless::{
 };
 
 mod led;
-mod motors;
+//mod motors;
+mod position;
 
 // Runtime Imports
 use rtfm::{app, Instant};
@@ -34,6 +35,10 @@ const APP: () = {
     static mut PTargetPoint: Producer<'static, [f32; 3], U4> = ();
     static mut CTargetPoint: Consumer<'static, [f32; 3], U4> = ();
 
+    /// Sensor Data
+    static mut Sensors: position::Sensors = ();
+    static mut LEDs: led::Leds = ();
+
     #[init(schedule = [periodic_task])]
     fn init() {
         //Create Ringbuffer at beginning of init function
@@ -45,18 +50,30 @@ const APP: () = {
         let _core: rtfm::Peripherals = core;
 
         // Device specific peripherals
-        let device: alt_stm32f30x_hal::stm32f30x::Peripherals = device;
+        let device: hal::stm32f30x::Peripherals = device;
 
         //Freeze clock frequencies
         let mut flash = device.FLASH.constrain();
-        let rcc = device.RCC.constrain();
+        let mut rcc = device.RCC.constrain();
 
-        let _clocks = rcc
+        let clocks = rcc
             .cfgr
             .sysclk(64.mhz())
-            .pclk1(32.mhz()) //TODO: Fix bug in hal crate to use different clocks for pclk1/pclk2
-            .pclk2(32.mhz())
+            .pclk1(32.mhz())
+            .pclk2(64.mhz())
             .freeze(&mut flash.acr);
+
+        // Setup the I2C Bus for the Magneto and Accelero Meter
+        let gpiob = device.GPIOB.split(&mut rcc.ahb);
+        let scl = gpiob.pb6.alternating(hal::gpio::AF4);
+        let sda = gpiob.pb7.alternating(hal::gpio::AF4);
+        let i2c = device.I2C1.i2c((scl, sda), 400.khz(), clocks);
+
+        let acc_sensor = lsm303dlhc::Lsm303dlhc::new(i2c).unwrap();
+
+        // Setup the on board LEDs
+        let gpioe = device.GPIOE.split(&mut rcc.ahb);
+        let leds = led::Leds::new(gpioe);
 
         //Create que for serial read
         *QSerialRead = Some(Queue::new());
@@ -68,7 +85,7 @@ const APP: () = {
 
         // Schedule Periodic Task
         schedule
-            .periodic_task(Instant::now() + 32_000_000.cycles())
+            .periodic_task(Instant::now() + 64_000_000.cycles())
             .unwrap();
 
         //Assign late resources
@@ -77,6 +94,9 @@ const APP: () = {
 
         PTargetPoint = pt;
         CTargetPoint = ct;
+
+        Sensors = position::Sensors { acc: acc_sensor };
+        LEDs = leds;
     }
 
     /// Idle Task for non critical jobs
@@ -93,11 +113,27 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(priority = 5 , resources = [CTargetPoint], schedule = [periodic_task])]
+    #[task(priority = 5 , resources = [CTargetPoint, Sensors, LEDs], schedule = [periodic_task])]
     fn periodic_task() {
+        static mut led_status: bool = false;
+
+        //Try to read Sensor Data
+        resources.Sensors.acc.temp().unwrap();
+
+        // Toggle LEDs
+        for led in resources.LEDs.iter_mut() {
+            if *led_status {
+                led.off();
+            } else {
+                led.on();
+            }
+        }
+
+        *led_status = !*led_status;
+
         //Rescedule task
         schedule
-            .periodic_task(scheduled + 32_000_000.cycles())
+            .periodic_task(scheduled + 64_000_000.cycles())
             .unwrap();
     }
 
