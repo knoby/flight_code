@@ -7,7 +7,8 @@
 extern crate panic_semihosting;
 
 // Used traits from the HAL crate
-use alt_stm32f30x_hal::prelude::*;
+extern crate alt_stm32f30x_hal as hal;
+use hal::prelude::*;
 
 // Message Passing between Idle, Interrupt and Periodic
 use heapless::{
@@ -15,12 +16,13 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
-mod hardware;
+mod led;
+mod motors;
 
 // Runtime Imports
 use rtfm::{app, Instant};
 
-#[app(device = alt_stm32f30x_hal::stm32f30x)]
+#[app(device = hal::stm32f30x)]
 const APP: () = {
     //Resourcen
 
@@ -47,9 +49,9 @@ const APP: () = {
 
         //Freeze clock frequencies
         let mut flash = device.FLASH.constrain();
-        let mut rcc = device.RCC.constrain();
+        let rcc = device.RCC.constrain();
 
-        let clocks = rcc
+        let _clocks = rcc
             .cfgr
             .sysclk(64.mhz())
             .pclk1(32.mhz()) //TODO: Fix bug in hal crate to use different clocks for pclk1/pclk2
@@ -81,9 +83,9 @@ const APP: () = {
     #[idle(resources = [CSerialRead, PTargetPoint])]
     fn idle() -> ! {
         // Buffer for message evaluation
-        let mut in_buffer = [0_u8; 32];
-        let mut rec_len = 0;
-        let mut msg = [0_u8; 32];
+        let _in_buffer = [0_u8; 32];
+        let _rec_len = 0;
+        let _msg = [0_u8; 32];
 
         loop {
             cortex_m::asm::nop();
@@ -98,10 +100,6 @@ const APP: () = {
             .periodic_task(scheduled + 32_000_000.cycles())
             .unwrap();
     }
-
-    /// Interrupt for reading data from serial interface
-    #[interrupt(priority = 10, resources = [ PSerialRead])]
-    fn USART2_EXTI26() {}
 
     // Interrupt handlers used to dispatch software tasks
     extern "C" {
