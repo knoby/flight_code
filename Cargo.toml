@@ -17,16 +17,16 @@ heapless = "0.4.1"
 [dependencies.rc_framing]
 path = "../rc_framing"
 
-[dependencies.stm32f1]
-version = "0.5.0"
-features = ["stm32f103", "rt"]
+[dependencies.nalgebra]
+default-features = false
+version = "0.17.3"
 
-[dependencies.stm32f1xx-hal]
-version = "0.1.1"
-features = ["rt", "stm32f103"]
+[dependencies.alt-stm32f30x-hal]
+version = "0.14.0"
+features = ["rt"]
 
 [dependencies.cortex-m-rtfm]
-version = "0.4.1"
+version = "0.4.2"
 features = ["timer-queue"]
 
 # this lets you use `cargo fix`!
