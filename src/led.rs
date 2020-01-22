@@ -169,6 +169,7 @@ impl ops::IndexMut<Direction> for Leds {
 
 /// One of the on-board user LEDs
 pub struct Led {
+    state: bool,
     pex: PEx<PullNone, Output<PushPull, MediumSpeed>>,
 }
 
@@ -177,8 +178,11 @@ macro_rules! ctor {
         $(
             impl Into<Led> for $ldx {
                 fn into(self) -> Led {
+                    let mut led = self.downgrade();
+                    led.set_low().unwrap();
                     Led {
-                        pex: self.downgrade(),
+                        state: false,
+                        pex: led,
                     }
                 }
             }
@@ -191,11 +195,26 @@ ctor!(LD3, LD4, LD5, LD6, LD7, LD8, LD9, LD10);
 impl Led {
     /// Turns the LED off
     pub fn off(&mut self) {
-        self.pex.set_low().unwrap();
+        self.state = false;
+        self.set_output();
     }
 
     /// Turns the LED on
     pub fn on(&mut self) {
-        self.pex.set_high().unwrap();
+        self.state = true;
+        self.set_output();
+    }
+
+    pub fn toggle(&mut self) {
+        self.state = !self.state;
+        self.set_output();
+    }
+
+    fn set_output(&mut self) {
+        if self.state {
+            self.pex.set_high().unwrap();
+        } else {
+            self.pex.set_low().unwrap();
+        }
     }
 }

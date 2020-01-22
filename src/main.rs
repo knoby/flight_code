@@ -16,7 +16,7 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
-use rtfm::cyccnt::{Instant, U32Ext};
+use rtfm::cyccnt::{Duration, Instant, U32Ext};
 
 mod led;
 //mod motors;
@@ -89,37 +89,25 @@ const APP: () = {
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CSerialRead])]
-    fn idle(_cx: idle::Context) -> ! {
-        // Buffer for message evaluation
-        let _in_buffer = [0_u8; 32];
-        let _rec_len = 0;
-        let _msg = [0_u8; 32];
-
+    #[idle(resources = [CSerialRead, LEDs])]
+    fn idle(cx: idle::Context) -> ! {
+        let mut led_state: usize = 0;
+        let mut last_change: Instant = Instant::now();
         loop {
-            cortex_m::asm::nop();
+            if Instant::now() - last_change > Duration::from_cycles(6_400_000) {
+                last_change = Instant::now();
+                cx.resources.LEDs[led_state].toggle();
+                led_state += 1;
+                if led_state >= 8 {
+                    led_state = 0;
+                }
+            }
         }
     }
 
     /// Periodic task for real time critical things
-    #[task(priority = 5 , resources = [Sensors, LEDs], schedule = [periodic_task])]
+    #[task(priority = 5 , resources = [Sensors], schedule = [periodic_task])]
     fn periodic_task(cx: periodic_task::Context) {
-        static mut led_status: bool = false;
-
-        //Try to read Sensor Data
-        cx.resources.Sensors.acc.temp().unwrap();
-
-        // Toggle LEDs
-        for led in cx.resources.LEDs.iter_mut() {
-            if *led_status {
-                led.off();
-            } else {
-                led.on();
-            }
-        }
-
-        *led_status = !*led_status;
-
         //Rescedule task
         cx.schedule
             .periodic_task(cx.scheduled + 64_000_000.cycles())
