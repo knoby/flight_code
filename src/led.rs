@@ -191,11 +191,11 @@ ctor!(LD3, LD4, LD5, LD6, LD7, LD8, LD9, LD10);
 impl Led {
     /// Turns the LED off
     pub fn off(&mut self) {
-        self.pex.set_low()
+        self.pex.set_low().unwrap();
     }
 
     /// Turns the LED on
     pub fn on(&mut self) {
-        self.pex.set_high()
+        self.pex.set_high().unwrap();
     }
 }

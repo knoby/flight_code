@@ -16,45 +16,39 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
+use rtfm::cyccnt::{Instant, U32Ext};
+
 mod led;
 //mod motors;
 mod position;
 
 // Runtime Imports
-use rtfm::{app, Instant};
+use rtfm::app;
 
-#[app(device = hal::stm32f30x)]
+#[app(device = hal::device, peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
 const APP: () = {
-    //Resourcen
+    struct Resources {
+        // Que for passing data from Serial Interrupt to Idle Task
+        PSerialRead: Producer<'static, Option<u8>, U4>,
+        CSerialRead: Consumer<'static, Option<u8>, U4>,
 
-    /// Que for passing data from Serial Interrupt to Idle Task
-    static mut PSerialRead: Producer<'static, Option<u8>, U4> = ();
-    static mut CSerialRead: Consumer<'static, Option<u8>, U4> = ();
-
-    /// Que for passing target positions from Idel Task to Periodic Task
-    static mut PTargetPoint: Producer<'static, [f32; 3], U4> = ();
-    static mut CTargetPoint: Consumer<'static, [f32; 3], U4> = ();
-
-    /// Sensor Data
-    static mut Sensors: position::Sensors = ();
-    static mut LEDs: led::Leds = ();
+        // Sensor Data
+        Sensors: position::Sensors,
+        LEDs: led::Leds,
+    }
 
     #[init(schedule = [periodic_task])]
-    fn init() {
+    fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
-        //TODO: check WHY
         static mut QSerialRead: Option<Queue<Option<u8>, U4>> = None;
-        static mut QTargetPoint: Option<Queue<[f32; 3], U4>> = None;
 
-        // Cortex-M peripherals
-        let _core: rtfm::Peripherals = core;
-
-        // Device specific peripherals
-        let device: hal::stm32f30x::Peripherals = device;
+        // Initialize (enable) the monotonic timer (CYCCNT)
+        cx.core.DCB.enable_trace();
+        cx.core.DWT.enable_cycle_counter();
 
         //Freeze clock frequencies
-        let mut flash = device.FLASH.constrain();
-        let mut rcc = device.RCC.constrain();
+        let mut flash = cx.device.FLASH.constrain();
+        let mut rcc = cx.device.RCC.constrain();
 
         let clocks = rcc
             .cfgr
@@ -64,44 +58,39 @@ const APP: () = {
             .freeze(&mut flash.acr);
 
         // Setup the I2C Bus for the Magneto and Accelero Meter
-        let gpiob = device.GPIOB.split(&mut rcc.ahb);
+        let gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
         let scl = gpiob.pb6.alternating(hal::gpio::AF4);
         let sda = gpiob.pb7.alternating(hal::gpio::AF4);
-        let i2c = device.I2C1.i2c((scl, sda), 400.khz(), clocks);
+        let i2c = cx.device.I2C1.i2c((scl, sda), 400.khz(), clocks);
 
         let acc_sensor = lsm303dlhc::Lsm303dlhc::new(i2c).unwrap();
 
         // Setup the on board LEDs
-        let gpioe = device.GPIOE.split(&mut rcc.ahb);
+        let gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
         let leds = led::Leds::new(gpioe);
 
         //Create que for serial read
         *QSerialRead = Some(Queue::new());
         let (ps, cs) = QSerialRead.as_mut().unwrap().split();
 
-        //Create que for target points
-        *QTargetPoint = Some(Queue::new());
-        let (pt, ct) = QTargetPoint.as_mut().unwrap().split();
-
         // Schedule Periodic Task
-        schedule
-            .periodic_task(Instant::now() + 64_000_000.cycles())
+        cx.schedule
+            .periodic_task(cx.start + 64_000_000.cycles())
             .unwrap();
 
         //Assign late resources
-        PSerialRead = ps;
-        CSerialRead = cs;
+        init::LateResources {
+            PSerialRead: ps,
+            CSerialRead: cs,
 
-        PTargetPoint = pt;
-        CTargetPoint = ct;
-
-        Sensors = position::Sensors { acc: acc_sensor };
-        LEDs = leds;
+            Sensors: position::Sensors { acc: acc_sensor },
+            LEDs: leds,
+        }
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CSerialRead, PTargetPoint])]
-    fn idle() -> ! {
+    #[idle(resources = [CSerialRead])]
+    fn idle(_cx: idle::Context) -> ! {
         // Buffer for message evaluation
         let _in_buffer = [0_u8; 32];
         let _rec_len = 0;
@@ -113,15 +102,15 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(priority = 5 , resources = [CTargetPoint, Sensors, LEDs], schedule = [periodic_task])]
-    fn periodic_task() {
+    #[task(priority = 5 , resources = [Sensors, LEDs], schedule = [periodic_task])]
+    fn periodic_task(cx: periodic_task::Context) {
         static mut led_status: bool = false;
 
         //Try to read Sensor Data
-        resources.Sensors.acc.temp().unwrap();
+        cx.resources.Sensors.acc.temp().unwrap();
 
         // Toggle LEDs
-        for led in resources.LEDs.iter_mut() {
+        for led in cx.resources.LEDs.iter_mut() {
             if *led_status {
                 led.off();
             } else {
@@ -132,8 +121,8 @@ const APP: () = {
         *led_status = !*led_status;
 
         //Rescedule task
-        schedule
-            .periodic_task(scheduled + 64_000_000.cycles())
+        cx.schedule
+            .periodic_task(cx.scheduled + 64_000_000.cycles())
             .unwrap();
     }
 
