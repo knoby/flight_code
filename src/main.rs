@@ -21,6 +21,7 @@ use rtfm::cyccnt::{Duration, Instant, U32Ext};
 mod led;
 //mod motors;
 mod position;
+mod serial;
 
 // Runtime Imports
 use rtfm::app;
@@ -29,9 +30,12 @@ use rtfm::app;
 const APP: () = {
     struct Resources {
         // Que for passing data from Serial Interrupt to Idle Task
-        PSerialRead: Producer<'static, Option<u8>, U4>,
-        CSerialRead: Consumer<'static, Option<u8>, U4>,
+        PSerialRead: Producer<'static, u8, U4>,
+        CSerialRead: Consumer<'static, u8, U4>,
 
+        // Communication to Base Station
+        SerialRx: serial::SerialRx,
+        SerialTx: serial::SerialTx,
         // Sensor Data
         Sensors: position::Sensors,
         LEDs: led::Leds,
@@ -40,7 +44,7 @@ const APP: () = {
     #[init(schedule = [periodic_task])]
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
-        static mut QSerialRead: Option<Queue<Option<u8>, U4>> = None;
+        static mut Q_SERIAL_READ: Option<Queue<u8, U4>> = None;
 
         // Initialize (enable) the monotonic timer (CYCCNT)
         cx.core.DCB.enable_trace();
@@ -70,8 +74,24 @@ const APP: () = {
         let leds = led::Leds::new(gpioe);
 
         //Create que for serial read
-        *QSerialRead = Some(Queue::new());
-        let (ps, cs) = QSerialRead.as_mut().unwrap().split();
+        *Q_SERIAL_READ = Some(Queue::new());
+        let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
+
+        // Create USART Port for communication to remote station
+        let gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
+        let tx_pin = gpioc
+            .pc4
+            .alternating(hal::gpio::AF7)
+            .output_speed(hal::gpio::HighSpeed);
+        let rx_pin = gpioc
+            .pc5
+            .alternating(hal::gpio::AF7)
+            .output_speed(hal::gpio::HighSpeed);
+        let serial = cx
+            .device
+            .USART1
+            .serial((tx_pin, rx_pin), hal::time::Bps(9600), clocks);
+        let (tx, rx) = serial::create_tx_rx(serial);
 
         // Schedule Periodic Task
         cx.schedule
@@ -82,6 +102,9 @@ const APP: () = {
         init::LateResources {
             PSerialRead: ps,
             CSerialRead: cs,
+
+            SerialRx: rx,
+            SerialTx: tx,
 
             Sensors: position::Sensors { acc: acc_sensor },
             LEDs: leds,
@@ -94,7 +117,9 @@ const APP: () = {
         let mut led_state: usize = 0;
         let mut last_change: Instant = Instant::now();
         loop {
-            if Instant::now() - last_change > Duration::from_cycles(6_400_000) {
+            if (Instant::now() - last_change > Duration::from_cycles(64_000_000))
+                | cx.resources.CSerialRead.dequeue().is_some()
+            {
                 last_change = Instant::now();
                 cx.resources.LEDs[led_state].toggle();
                 led_state += 1;
@@ -112,6 +137,25 @@ const APP: () = {
         cx.schedule
             .periodic_task(cx.scheduled + 64_000_000.cycles())
             .unwrap();
+    }
+
+    /// Interrupt for reciving bytes from serial and sending to idle task
+    #[task(binds = USART1_EXTI25, priority = 8, resources = [SerialRx, PSerialRead])]
+    fn read_serial_byte(cx: read_serial_byte::Context) {
+        match cx.resources.SerialRx.read() {
+            Ok(b) => {
+                // Send Data to main task
+                cx.resources.PSerialRead.enqueue(b).ok(); // Do not care if full
+            }
+            Err(nb::Error::Other(e)) => {
+                if let hal::serial::Error::Overrun = e {
+                    cx.resources.SerialRx.clear_overrun_error();
+                } else {
+                    // Ignore other Errors
+                }
+            }
+            Err(nb::Error::WouldBlock) => {} // Ignore errors
+        }
     }
 
     // Interrupt handlers used to dispatch software tasks
