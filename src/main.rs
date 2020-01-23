@@ -116,10 +116,12 @@ const APP: () = {
     fn idle(cx: idle::Context) -> ! {
         let mut led_state: usize = 0;
         let mut last_change: Instant = Instant::now();
+        let mut speed: u32 = 64_000_000;
         loop {
-            if (Instant::now() - last_change > Duration::from_cycles(64_000_000))
-                | cx.resources.CSerialRead.dequeue().is_some()
-            {
+            if let Some(val) = cx.resources.CSerialRead.dequeue() {
+                speed = 16_000_000 / 255 * (255 - val) as u32 + 4_000_000;
+            }
+            if Instant::now() - last_change > Duration::from_cycles(speed) {
                 last_change = Instant::now();
                 cx.resources.LEDs[led_state].toggle();
                 led_state += 1;
