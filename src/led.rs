@@ -10,27 +10,35 @@ use hal::prelude::*;
 
 ///  North LED
 pub type LD3 = PE9<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedN = PE9<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// Northeast LED
 pub type LD5 = PE10<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedNE = PE10<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// East LED
 pub type LD7 = PE11<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedE = PE11<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// Southeast LED
 pub type LD9 = PE12<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedSE = PE12<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// South LED
 pub type LD10 = PE13<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedS = PE13<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// Southwest LED
 pub type LD8 = PE14<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedSW = PE14<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// West LED
 pub type LD6 = PE15<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedW = PE15<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// Northwest LED
 pub type LD4 = PE8<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LedNW = PE8<PullNone, Output<PushPull, MediumSpeed>>;
 
 /// Cardinal directions. Each one matches one of the user LEDs.
 pub enum Direction {
@@ -58,58 +66,17 @@ pub struct Leds {
 }
 
 impl Leds {
-    /// Initializes all the user LEDs
-    pub fn new(gpioe: hal::gpio::Gpioe) -> Self {
-        let n = gpioe
-            .pe9
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-
-        let ne = gpioe
-            .pe10
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-        let e = gpioe
-            .pe11
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-        let se = gpioe
-            .pe12
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-        let s = gpioe
-            .pe13
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-        let sw = gpioe
-            .pe14
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-        let w = gpioe
-            .pe15
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-        let nw = gpioe
-            .pe8
-            .pull_type(PullNone)
-            .output()
-            .output_type(PushPull)
-            .output_speed(MediumSpeed);
-
+    /// Initializes all the user LEDs and return as array
+    pub fn new(
+        n: LedN,
+        ne: LedNE,
+        e: LedE,
+        se: LedSE,
+        s: LedS,
+        sw: LedSW,
+        w: LedW,
+        nw: LedNW,
+    ) -> Self {
         Leds {
             leds: [
                 n.into(),
