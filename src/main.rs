@@ -3,12 +3,15 @@
 #![no_std]
 
 // Define Panic behaivior
-// extern crate panic_halt;
+//extern crate panic_halt;
 extern crate panic_semihosting;
 
 // Used traits from the HAL crate
 extern crate alt_stm32f30x_hal as hal;
 use hal::prelude::*;
+
+#[macro_use(block)]
+extern crate nb;
 
 // Message Passing between Idle, Interrupt and Periodic
 use heapless::{
@@ -126,8 +129,6 @@ const APP: () = {
             .output_speed(hal::gpio::HighSpeed)
             .to_pwm(channels.3, hal::gpio::HighSpeed);
 
-        pwm_pin_motor_vl.set_duty(9);
-
         //Create que for serial read
         *Q_SERIAL_READ = Some(Queue::new());
         let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
@@ -160,16 +161,13 @@ const APP: () = {
             SerialRx: rx,
             SerialTx: tx,
 
-            Sensors: position::Sensors {
-                acc: acc_sensor,
-                gyro: gyro_sensor,
-            },
+            Sensors: position::Sensors::new(acc_sensor, gyro_sensor, l3gd20::Scale::Dps2000),
             LED_N: led_n,
         }
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CSerialRead, LED_N])]
+    #[idle(resources = [CSerialRead, LED_N, SerialTx])]
     fn idle(cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U32>::new();
         loop {
@@ -177,14 +175,28 @@ const APP: () = {
                 // Read from que
                 if serial::check_frame_end(val) {
                     // Check if byte is end from frame
-                    if let Ok(cmd) = serial::decode_buffer(buffer.as_ref()) {
+                    if let Ok(cmd) = copter_defs::Command::from_slip(&buffer) {
                         // Try to decode
-                        use serial::Command;
+                        use copter_defs::Command::*;
                         match cmd {
                             // Execute Command
-                            Command::ToggleLed => cx.resources.LED_N.toggle().unwrap(),
-                            Command::StopMotor(_) => (),
-                            Command::StartMotor(_) => (),
+                            ToggleLed => cx.resources.LED_N.toggle().unwrap(),
+                            GetMotionState => {
+                                let test_state =
+                                    SendMotionState(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+                                test_state
+                                    .to_slip(&mut buffer)
+                                    .and_then(|_| {
+                                        buffer
+                                            .iter()
+                                            .try_for_each(|byte| {
+                                                block!(cx.resources.SerialTx.write(*byte))
+                                            })
+                                            .map_err(|_| ())
+                                    })
+                                    .ok(); // Ignore if not working
+                            }
+                            _ => (),
                         }
                     }
                     buffer.clear(); // Reset Index
