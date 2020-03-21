@@ -19,6 +19,9 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
+extern crate cortex_m_semihosting;
+use cortex_m_semihosting::hprintln;
+
 use rtfm::cyccnt::U32Ext;
 
 mod led;
@@ -39,12 +42,18 @@ const APP: () = {
         PSerialRead: Producer<'static, u8, U4>,
         CSerialRead: Consumer<'static, u8, U4>,
 
+        PMotionToIdle: Producer<'static, (f32, f32, f32), U4>,
+        CMotionToIdle: Consumer<'static, (f32, f32, f32), U4>,
+
         // Communication to Base Station
         SerialRx: serial::SerialRx,
         SerialTx: serial::SerialTx,
 
         // Sensor Data
         Sensors: position::Sensors,
+
+        // Motor Control
+        Motors: motors::Motors,
 
         // LEDs
         LED_N: led::LedN,
@@ -54,6 +63,7 @@ const APP: () = {
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U4>> = None;
+        static mut Q_MOTION_TO_IDLE: Option<Queue<(f32, f32, f32), U4>> = None;
 
         // Initialize (enable) the monotonic timer (CYCCNT)
         cx.core.DCB.enable_trace();
@@ -106,32 +116,30 @@ const APP: () = {
 
         // Setup PWM Outputs for Servor Motors
         let gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
-        let timer = alt_stm32f30x_hal::timer::tim3::Timer::new(cx.device.TIM3, 100.hz(), clocks);
-        let (channels, _timer) = timer.use_pwm();
-        let mut pwm_pin_motor_vl = gpioc
+        let pwm_pin_motor_vl = gpioc
             .pc6
-            .alternating(hal::gpio::AF1)
-            .output_speed(hal::gpio::HighSpeed)
-            .to_pwm(channels.0, hal::gpio::HighSpeed);
-        let _pwm_pin_motor_vr = gpioc
+            .alternating(hal::gpio::AF2)
+            .output_speed(hal::gpio::HighSpeed);
+        let pwm_pin_motor_vr = gpioc
             .pc7
-            .alternating(hal::gpio::AF1)
-            .output_speed(hal::gpio::HighSpeed)
-            .to_pwm(channels.1, hal::gpio::HighSpeed);
-        let _pwm_pin_motor_hl = gpioc
+            .alternating(hal::gpio::AF2)
+            .output_speed(hal::gpio::HighSpeed);
+        let pwm_pin_motor_hl = gpioc
             .pc8
-            .alternating(hal::gpio::AF1)
-            .output_speed(hal::gpio::HighSpeed)
-            .to_pwm(channels.2, hal::gpio::HighSpeed);
-        let _pwm_pin_motor_hr = gpioc
+            .alternating(hal::gpio::AF2)
+            .output_speed(hal::gpio::HighSpeed);
+        let pwm_pin_motor_hr = gpioc
             .pc9
-            .alternating(hal::gpio::AF1)
-            .output_speed(hal::gpio::HighSpeed)
-            .to_pwm(channels.3, hal::gpio::HighSpeed);
+            .alternating(hal::gpio::AF2)
+            .output_speed(hal::gpio::HighSpeed);
 
         //Create que for serial read
         *Q_SERIAL_READ = Some(Queue::new());
         let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
+
+        //Create que for serial read
+        *Q_MOTION_TO_IDLE = Some(Queue::new());
+        let (psmt, csmt) = Q_MOTION_TO_IDLE.as_mut().unwrap().split();
 
         // Create USART Port for communication to remote station
         let tx_pin = gpioc
@@ -158,19 +166,34 @@ const APP: () = {
             PSerialRead: ps,
             CSerialRead: cs,
 
+            PMotionToIdle: psmt,
+            CMotionToIdle: csmt,
+
             SerialRx: rx,
             SerialTx: tx,
 
             Sensors: position::Sensors::new(acc_sensor, gyro_sensor, l3gd20::Scale::Dps2000),
+            Motors: motors::Motors::new(
+                pwm_pin_motor_vl,
+                pwm_pin_motor_vr,
+                pwm_pin_motor_hl,
+                pwm_pin_motor_hr,
+                cx.device.TIM3,
+                clocks,
+            ),
             LED_N: led_n,
         }
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CSerialRead, LED_N, SerialTx])]
+    #[idle(resources = [CSerialRead, CMotionToIdle, LED_N, SerialTx])]
     fn idle(cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U32>::new();
+        let mut angle = (0.0, 0.0, 0.0);
         loop {
+            if let Some(val) = cx.resources.CMotionToIdle.dequeue() {
+                angle = val;
+            }
             if let Some(val) = cx.resources.CSerialRead.dequeue() {
                 // Read from que
                 if serial::check_frame_end(val) {
@@ -182,8 +205,9 @@ const APP: () = {
                             // Execute Command
                             ToggleLed => cx.resources.LED_N.toggle().unwrap(),
                             GetMotionState => {
-                                let test_state =
-                                    SendMotionState(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+                                let test_state = SendMotionState(nalgebra::Vector3::new(
+                                    angle.0, angle.1, angle.2,
+                                ));
                                 test_state
                                     .to_slip(&mut buffer)
                                     .and_then(|_| {
@@ -209,8 +233,16 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(priority = 5 , resources = [Sensors], schedule = [periodic_task])]
+    #[task(priority = 5 , resources = [Sensors, PMotionToIdle], schedule = [periodic_task])]
     fn periodic_task(cx: periodic_task::Context) {
+        // Update orientation
+        cx.resources.Sensors.update(0.01);
+
+        cx.resources
+            .PMotionToIdle
+            .enqueue(cx.resources.Sensors.angle.euler_angles())
+            .ok();
+
         //Rescedule task
         cx.schedule
             .periodic_task(cx.scheduled + CONTROL_CYCLE.cycles())

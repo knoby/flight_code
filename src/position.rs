@@ -4,7 +4,6 @@ use lsm303dlhc;
 use hal::gpio::{HighSpeed, PullNone, PushPull, AF4, AF5};
 
 extern crate cortex_m_semihosting;
-use cortex_m_semihosting::dbg;
 
 /// I2C Configuration
 type I2cSclPin = hal::gpio::PB6<PullNone, hal::gpio::AltFn<AF4, PushPull, HighSpeed>>;
@@ -25,26 +24,28 @@ pub type L3gd20 =
 /// On board LSM303DLHC connected to the I2C1 bus via the PB6 and PB7 pins
 pub type Lsm303dlhc = lsm303dlhc::Lsm303dlhc<hal::i2c::I2c<I2c, (I2cSclPin, I2cSdaPin)>>;
 
+// used types
+type Vector = nalgebra::Vector3<f32>;
+
 pub struct Sensors {
     acc: Lsm303dlhc,
-    acc_offset: [f32; 3],
+    acc_offset: Vector,
     gyro: L3gd20,
-    gyro_offset: [f32; 3],
+    gyro_offset: Vector,
     gyro_scale: l3gd20::Scale,
-    angle_vel: nalgebra::Vector3<f32>,
-    angle: nalgebra::UnitQuaternion<f32>,
+    angle_vel: Vector,
+    pub angle: nalgebra::UnitQuaternion<f32>,
 }
 
 impl Sensors {
     pub fn new(acc: Lsm303dlhc, gyro: L3gd20, gyro_scale: l3gd20::Scale) -> Self {
         let mut sensors = Self {
             acc,
-            acc_offset: [0.0; 3],
+            acc_offset: Vector::zeros(),
             gyro,
-            gyro_offset: [0.0; 3],
+            gyro_offset: Vector::zeros(),
             gyro_scale,
-
-            angle_vel: nalgebra::Vector3::<f32>::zeros(),
+            angle_vel: Vector::zeros(),
             angle: nalgebra::UnitQuaternion::<f32>::identity(),
         };
 
@@ -74,47 +75,50 @@ impl Sensors {
 
         // Calculate the Offset of the gyre reading by reading 100 Values and divinding the sum by
         // 100
-        let mut gyro_offset = [0.0_f32; 3];
-        let mut acc_offset = [0.0_f32; 3];
+        let mut gyro_offset = Vector::zeros();
+        let mut acc_offset = Vector::zeros();
         for _ in 0..100 {
             let reading = self.gyro.gyro().unwrap();
-            gyro_offset[0] += self.gyro_scale.degrees(reading.x);
-            gyro_offset[1] += self.gyro_scale.degrees(reading.y);
-            gyro_offset[2] += self.gyro_scale.degrees(reading.z);
+            gyro_offset.x += self.gyro_scale.radians(reading.x);
+            gyro_offset.y += self.gyro_scale.radians(reading.y);
+            gyro_offset.z += self.gyro_scale.radians(reading.z);
 
             let reading = self.acc.accel().unwrap();
-            acc_offset[0] += reading.x as f32 / 16384.0 * 9.81 * 4.0;
-            acc_offset[1] += reading.y as f32 / 16384.0 * 9.81 * 4.0;
-            acc_offset[2] += reading.z as f32 / 16384.0 * 9.81 * 4.0;
+            acc_offset.x += reading.x as f32 / 16384.0 * 9.81 * 4.0;
+            acc_offset.y += reading.y as f32 / 16384.0 * 9.81 * 4.0;
+            acc_offset.z += reading.z as f32 / 16384.0 * 9.81 * 4.0;
 
             cortex_m::asm::delay(640_000);
         }
-        for (i, value) in gyro_offset.iter().enumerate() {
-            self.gyro_offset[i] = value / 100.0;
-        }
-        for (i, value) in acc_offset.iter().enumerate() {
-            self.acc_offset[i] = value / 100.0;
-        }
-        self.acc_offset[2] -= 9.81; // The gravity Offset is not needed here
-        dbg!(self.acc_offset);
+        self.gyro_offset = -gyro_offset / 100.0;
+        self.acc_offset = -acc_offset / 100.0;
+        self.acc_offset.z -= 9.81; // The gravity Offset is not needed here
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self, dt: f32) {
         // Update gyro data
-        let gyro_data = self.gyro.all().unwrap();
+        let gyro_data = self.gyro.gyro().unwrap();
         // Update Acc Data
-        let _acc_data = self.acc.accel().unwrap();
+        let acc_data = self.acc.accel().unwrap();
         // Update Mag data
-        let _mag_data = self.acc.mag().unwrap();
+        let mag_data = self.acc.mag().unwrap();
 
         // Convert Gyrodata to si units
-        self.angle_vel = [
-            self.gyro_scale.radians(gyro_data.gyro.x),
-            self.gyro_scale.radians(gyro_data.gyro.x),
-            self.gyro_scale.radians(gyro_data.gyro.x),
-        ]
-        .into();
+        self.angle_vel = Vector::new(
+            self.gyro_scale.radians(gyro_data.x),
+            self.gyro_scale.radians(gyro_data.y),
+            self.gyro_scale.radians(gyro_data.z),
+        ) + self.gyro_offset;
 
-        // Convert the acc data to Normalized Vector
+        // Integrate and convert to quaternion
+
+        // Normalize acc and mag vector
+        let acc_dir = Vector::new(
+            acc_data.x as f32 / 16384.0 * 9.81 * 4.0,
+            acc_data.y as f32 / 16384.0 * 9.81 * 4.0,
+            acc_data.z as f32 / 16384.0 * 9.81 * 4.0,
+        ) + self.acc_offset;
+        let z_axis = -acc_dir / acc_dir.norm();
+        let x_axis = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
     }
 }
