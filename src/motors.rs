@@ -18,7 +18,6 @@ type PwmHR =
 type Timer = hal::device::TIM3;
 
 pub struct Motors {
-    timer: PwmTimer,
     pwm_vl: PwmVL,
     pwm_vr: PwmVR,
     pwm_hl: PwmHL,
@@ -41,7 +40,11 @@ impl Motors {
         // Full Power 1860us
 
         // Setup the timer
-        let timer = alt_stm32f30x_hal::timer::tim3::Timer::new(timer, 100.hz(), clocks);
+        let mut timer = alt_stm32f30x_hal::timer::tim3::Timer::new(timer, 100.hz(), clocks);
+
+        // Enable Interrupt
+        timer.listen(hal::timer::Event::TimeOut);
+
         let (channels, mut timer) = timer.use_pwm();
 
         // Config PWM Pins
@@ -68,7 +71,6 @@ impl Motors {
             pwm_vr: vr,
             pwm_hl: hl,
             pwm_hr: hr,
-            timer,
             duty_stop: duty_stop as u32,
             duty_full: duty_full as u32,
         };
@@ -114,5 +116,10 @@ impl Motors {
             let var_duty = (self.duty_full - self.duty_stop) as f32 * speed / 100.0;
             self.duty_stop + var_duty as u32
         }
+    }
+
+    /// Returns the Period of the underlying timer in seconds
+    pub fn period(&self) -> f32 {
+        0.1
     }
 }

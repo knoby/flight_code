@@ -22,8 +22,7 @@ use heapless::{
 extern crate cortex_m_semihosting;
 use cortex_m_semihosting::hprintln;
 
-use rtfm::cyccnt::U32Ext;
-
+mod fc;
 mod led;
 mod motors;
 mod position;
@@ -33,33 +32,35 @@ mod serial;
 use rtfm::app;
 
 // Program Constants
-const CONTROL_CYCLE: u32 = 640_000; // Sysclock = 64 Mhz --> 64_000_000 / 100 = 640_000 Cycles per Task = 10ms
 
 #[app(device = hal::device, peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         // Que for passing data from Serial Interrupt to Idle Task
-        PSerialRead: Producer<'static, u8, U4>,
-        CSerialRead: Consumer<'static, u8, U4>,
+        PROD_SERIAL_READ: Producer<'static, u8, U4>,
+        CONS_SERIAL_READ: Consumer<'static, u8, U4>,
 
-        PMotionToIdle: Producer<'static, (f32, f32, f32), U4>,
-        CMotionToIdle: Consumer<'static, (f32, f32, f32), U4>,
+        PROD_MOTION_TO_IDLE: Producer<'static, (f32, f32, f32), U4>,
+        CONS_MOTION_TO_IDLE: Consumer<'static, (f32, f32, f32), U4>,
 
         // Communication to Base Station
-        SerialRx: serial::SerialRx,
-        SerialTx: serial::SerialTx,
+        SERIAL_RX: serial::SerialRx,
+        SERIAL_TX: serial::SerialTx,
 
         // Sensor Data
-        Sensors: position::Sensors,
+        SENSORS: position::Sensors,
 
         // Motor Control
-        Motors: motors::Motors,
+        MOTORS: motors::Motors,
 
         // LEDs
         LED_N: led::LedN,
+
+        // Flight Controller
+        FC: fc::FlighController,
     }
 
-    #[init(schedule = [periodic_task])]
+    #[init()]
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U4>> = None;
@@ -114,7 +115,7 @@ const APP: () = {
 
         let gyro_sensor = l3gd20::L3gd20::new(spi, nss).unwrap();
 
-        // Setup PWM Outputs for Servor Motors
+        // Create Pins for PWM Output to control the ESC
         let gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
         let pwm_pin_motor_vl = gpioc
             .pc6
@@ -156,24 +157,19 @@ const APP: () = {
             .serial((tx_pin, rx_pin), hal::time::Bps(9600), clocks);
         let (tx, rx) = serial::create_tx_rx(serial);
 
-        // Schedule Periodic Task
-        cx.schedule
-            .periodic_task(cx.start + CONTROL_CYCLE.cycles())
-            .unwrap();
-
         //Assign late resources
         init::LateResources {
-            PSerialRead: ps,
-            CSerialRead: cs,
+            PROD_SERIAL_READ: ps,
+            CONS_SERIAL_READ: cs,
 
-            PMotionToIdle: psmt,
-            CMotionToIdle: csmt,
+            PROD_MOTION_TO_IDLE: psmt,
+            CONS_MOTION_TO_IDLE: csmt,
 
-            SerialRx: rx,
-            SerialTx: tx,
+            SERIAL_RX: rx,
+            SERIAL_TX: tx,
 
-            Sensors: position::Sensors::new(acc_sensor, gyro_sensor, l3gd20::Scale::Dps2000),
-            Motors: motors::Motors::new(
+            SENSORS: position::Sensors::new(acc_sensor, gyro_sensor, l3gd20::Scale::Dps2000),
+            MOTORS: motors::Motors::new(
                 pwm_pin_motor_vl,
                 pwm_pin_motor_vr,
                 pwm_pin_motor_hl,
@@ -182,19 +178,20 @@ const APP: () = {
                 clocks,
             ),
             LED_N: led_n,
+            FC: fc::FlighController::new(),
         }
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CSerialRead, CMotionToIdle, LED_N, SerialTx])]
+    #[idle(resources = [CONS_SERIAL_READ, CONS_MOTION_TO_IDLE, LED_N, SERIAL_TX])]
     fn idle(cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U32>::new();
         let mut angle = (0.0, 0.0, 0.0);
         loop {
-            if let Some(val) = cx.resources.CMotionToIdle.dequeue() {
+            if let Some(val) = cx.resources.CONS_MOTION_TO_IDLE.dequeue() {
                 angle = val;
             }
-            if let Some(val) = cx.resources.CSerialRead.dequeue() {
+            if let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
                 // Read from que
                 if serial::check_frame_end(val) {
                     // Check if byte is end from frame
@@ -214,7 +211,7 @@ const APP: () = {
                                         buffer
                                             .iter()
                                             .try_for_each(|byte| {
-                                                block!(cx.resources.SerialTx.write(*byte))
+                                                block!(cx.resources.SERIAL_TX.write(*byte))
                                             })
                                             .map_err(|_| ())
                                     })
@@ -233,33 +230,32 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(priority = 5 , resources = [Sensors, PMotionToIdle], schedule = [periodic_task])]
+    #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, PROD_MOTION_TO_IDLE, MOTORS])]
     fn periodic_task(cx: periodic_task::Context) {
         // Update orientation
-        cx.resources.Sensors.update(0.01);
+        cx.resources.SENSORS.update(cx.resources.MOTORS.period());
+
+        cx.resources.FC.update();
+
+        cx.resources.MOTORS.set_speed(0.0, 0.0, 0.0, 0.0);
 
         cx.resources
-            .PMotionToIdle
-            .enqueue(cx.resources.Sensors.angle.euler_angles())
+            .PROD_MOTION_TO_IDLE
+            .enqueue(cx.resources.SENSORS.angle.euler_angles())
             .ok();
-
-        //Rescedule task
-        cx.schedule
-            .periodic_task(cx.scheduled + CONTROL_CYCLE.cycles())
-            .unwrap();
     }
 
     /// Interrupt for reciving bytes from serial and sending to idle task
-    #[task(binds = USART1_EXTI25, priority = 8, resources = [SerialRx, PSerialRead])]
+    #[task(binds = USART1_EXTI25, priority = 8, resources = [SERIAL_RX, PROD_SERIAL_READ])]
     fn read_serial_byte(cx: read_serial_byte::Context) {
-        match cx.resources.SerialRx.read() {
+        match cx.resources.SERIAL_RX.read() {
             Ok(b) => {
                 // Send Data to main task
-                cx.resources.PSerialRead.enqueue(b).ok(); // Do not care if full
+                cx.resources.PROD_SERIAL_READ.enqueue(b).ok(); // Do not care if full
             }
             Err(nb::Error::Other(e)) => {
                 if let hal::serial::Error::Overrun = e {
-                    cx.resources.SerialRx.clear_overrun_error();
+                    cx.resources.SERIAL_RX.clear_overrun_error();
                 } else {
                     // Ignore other Errors
                 }
@@ -268,7 +264,7 @@ const APP: () = {
         }
     }
 
-    // Interrupt handlers used to dispatch software tasks
+    /// Interrupt handlers used to dispatch software tasks
     extern "C" {
         fn EXTI0();
     }
