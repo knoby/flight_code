@@ -29,7 +29,6 @@ type Vector = nalgebra::Vector3<f32>;
 
 pub struct Sensors {
     acc: Lsm303dlhc,
-    acc_offset: Vector,
     gyro: L3gd20,
     gyro_offset: Vector,
     gyro_scale: l3gd20::Scale,
@@ -41,7 +40,6 @@ impl Sensors {
     pub fn new(acc: Lsm303dlhc, gyro: L3gd20, gyro_scale: l3gd20::Scale) -> Self {
         let mut sensors = Self {
             acc,
-            acc_offset: Vector::zeros(),
             gyro,
             gyro_offset: Vector::zeros(),
             gyro_scale,
@@ -83,19 +81,14 @@ impl Sensors {
             gyro_offset.y += self.gyro_scale.radians(reading.y);
             gyro_offset.z += self.gyro_scale.radians(reading.z);
 
-            let reading = self.acc.accel().unwrap();
-            acc_offset.x += reading.x as f32 / 16384.0 * 9.81 * 4.0;
-            acc_offset.y += reading.y as f32 / 16384.0 * 9.81 * 4.0;
-            acc_offset.z += reading.z as f32 / 16384.0 * 9.81 * 4.0;
-
             cortex_m::asm::delay(640_000);
         }
         self.gyro_offset = -gyro_offset / 100.0;
-        self.acc_offset = -acc_offset / 100.0;
-        self.acc_offset.z -= 9.81; // The gravity Offset is not needed here
     }
 
     pub fn update(&mut self, dt: f32) {
+        // Update the Orientation with the algorithem from ttp://philstech.blogspot.com/
+
         // Update gyro data
         let gyro_data = self.gyro.gyro().unwrap();
         // Update Acc Data
@@ -103,22 +96,43 @@ impl Sensors {
         // Update Mag data
         let mag_data = self.acc.mag().unwrap();
 
-        // Convert Gyrodata to si units
+        // Convert Gyrodata to si units and compensate Offset
         self.angle_vel = Vector::new(
-            self.gyro_scale.radians(gyro_data.x),
+            -self.gyro_scale.radians(gyro_data.x),
             self.gyro_scale.radians(gyro_data.y),
             self.gyro_scale.radians(gyro_data.z),
         ) + self.gyro_offset;
 
-        // Integrate and convert to quaternion
-
-        // Normalize acc and mag vector
-        let acc_dir = Vector::new(
-            acc_data.x as f32 / 16384.0 * 9.81 * 4.0,
+        // Calculate gravity vector in body frame
+        let acc_body = Vector::new(
             acc_data.y as f32 / 16384.0 * 9.81 * 4.0,
+            acc_data.x as f32 / 16384.0 * 9.81 * 4.0,
             acc_data.z as f32 / 16384.0 * 9.81 * 4.0,
-        ) + self.acc_offset;
-        let z_axis = -acc_dir / acc_dir.norm();
-        let x_axis = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
+        );
+
+        // Calculate mag vector in body frame
+        let mut _mag_body = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
+
+        // Convert gravity Vector to world frame with estimation of orientation from last cycle
+        let mut acc_world = self.angle.transform_vector(&acc_body);
+        acc_world /= acc_world.norm();
+
+        // Compare the normalised acc vector with gravity
+        let grav_world = nalgebra::base::Vector3::new(0.0, 0.0, 1.0);
+        let grav_correction_world = acc_world.cross(&grav_world) * 0.01;
+
+        // Rotate correction Vector back to Body frame
+        let grav_correction_body = self.angle.inverse_transform_vector(&grav_correction_world);
+
+        // Dived by the sample rate and add to gyro measurement
+        let gyro_data_with_correction = (self.angle_vel * dt) + grav_correction_body;
+
+        // Integrate Velocit and add to current estimation
+        let delta_angle = nalgebra::geometry::UnitQuaternion::from_euler_angles(
+            gyro_data_with_correction.x,
+            gyro_data_with_correction.y,
+            gyro_data_with_correction.z,
+        );
+        self.angle *= delta_angle;
     }
 }

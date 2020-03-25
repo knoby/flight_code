@@ -24,6 +24,7 @@ pub struct Motors {
     pwm_hr: PwmHR,
     duty_stop: u32,
     duty_full: u32,
+    timer: PwmTimer,
 }
 
 impl Motors {
@@ -73,19 +74,19 @@ impl Motors {
             pwm_hr: hr,
             duty_stop: duty_stop as u32,
             duty_full: duty_full as u32,
+            timer,
         };
 
         // Arm Motors
         motors.stop();
-        cortex_m::asm::delay(64_000_000);
+        cortex_m::asm::delay(32_000_000);
 
         // Spinn Motors for 1 second
-        cortex_m::asm::delay(64_000_000);
-        motors.set_speed(2.0, 2.0, 2.0, 2.0);
+        motors.set_speed(10.0, 10.0, 10.0, 10.0);
+        cortex_m::asm::delay(32_000_000);
 
         // Stop Motors again
         motors.stop();
-        cortex_m::asm::delay(64_000_000);
 
         // Return the Motor Struct:
         motors
@@ -120,6 +121,11 @@ impl Motors {
 
     /// Returns the Period of the underlying timer in seconds
     pub fn period(&self) -> f32 {
-        0.1
+        0.01
+    }
+
+    /// Reset ISR Flag (UIF)
+    pub fn reset_isr_flag(&mut self) {
+        self.timer.reset_uif();
     }
 }

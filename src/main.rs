@@ -55,6 +55,8 @@ const APP: () = {
 
         // LEDs
         LED_N: led::LedN,
+        LED_NE: led::LedNE,
+        LED_E: led::LedE,
 
         // Flight Controller
         FC: fc::FlighController,
@@ -84,6 +86,8 @@ const APP: () = {
         // Setup the on board LEDs
         let gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
         let led_n = gpioe.pe9.output().output_speed(hal::gpio::MediumSpeed);
+        let led_ne = gpioe.pe10.output().output_speed(hal::gpio::MediumSpeed);
+        let led_e = gpioe.pe11.output().output_speed(hal::gpio::MediumSpeed);
 
         // Setup the I2C Bus for the Magneto and Accelero Meter
         let gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
@@ -178,16 +182,20 @@ const APP: () = {
                 clocks,
             ),
             LED_N: led_n,
+            LED_NE: led_ne,
+            LED_E: led_e,
             FC: fc::FlighController::new(),
         }
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CONS_SERIAL_READ, CONS_MOTION_TO_IDLE, LED_N, SERIAL_TX])]
+    #[idle(resources = [CONS_SERIAL_READ, CONS_MOTION_TO_IDLE, LED_N, LED_NE, LED_E, SERIAL_TX])]
     fn idle(cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U32>::new();
         let mut angle = (0.0, 0.0, 0.0);
         loop {
+            // Toggle LED for Idle Mode is running
+            cx.resources.LED_NE.toggle().unwrap();
             if let Some(val) = cx.resources.CONS_MOTION_TO_IDLE.dequeue() {
                 angle = val;
             }
@@ -196,6 +204,8 @@ const APP: () = {
                 if serial::check_frame_end(val) {
                     // Check if byte is end from frame
                     if let Ok(cmd) = copter_defs::Command::from_slip(&buffer) {
+                        // Toggle LED for Reciving Data
+                        cx.resources.LED_E.toggle().unwrap();
                         // Try to decode
                         use copter_defs::Command::*;
                         match cmd {
@@ -243,6 +253,8 @@ const APP: () = {
             .PROD_MOTION_TO_IDLE
             .enqueue(cx.resources.SENSORS.angle.euler_angles())
             .ok();
+        // Reset the ISR Flag
+        cx.resources.MOTORS.reset_isr_flag();
     }
 
     /// Interrupt for reciving bytes from serial and sending to idle task
