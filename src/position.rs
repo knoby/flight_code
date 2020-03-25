@@ -111,21 +111,32 @@ impl Sensors {
         );
 
         // Calculate mag vector in body frame
-        let mut _mag_body = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
+        let mut mag_body = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
 
         // Convert gravity Vector to world frame with estimation of orientation from last cycle
         let mut acc_world = self.angle.transform_vector(&acc_body);
         acc_world /= acc_world.norm();
+        // Convert mag vector to world frame with estimation of orientation from last cycle
+        let mut mag_world = self.angle.transform_vector(&mag_body);
+        // Remove z-component/Inclination
+        mag_world.z = 0.0;
+        mag_world /= mag_world.norm();
 
         // Compare the normalised acc vector with gravity
-        let grav_world = nalgebra::base::Vector3::new(0.0, 0.0, 1.0);
+        let grav_world = Vector::new(0.0, 0.0, 1.0);
         let grav_correction_world = acc_world.cross(&grav_world) * 0.01;
 
+        // Compare with north direction/x-Axis
+        let north_world = Vector::new(1.0, 0.0, 0.0);
+        let mag_correction_world = mag_world.cross(&north_world) * 0.01;
+
         // Rotate correction Vector back to Body frame
-        let grav_correction_body = self.angle.inverse_transform_vector(&grav_correction_world);
+        let correction_body = self
+            .angle
+            .inverse_transform_vector(&(grav_correction_world + mag_correction_world));
 
         // Dived by the sample rate and add to gyro measurement
-        let gyro_data_with_correction = (self.angle_vel * dt) + grav_correction_body;
+        let gyro_data_with_correction = (self.angle_vel * dt) + correction_body;
 
         // Integrate Velocit and add to current estimation
         let delta_angle = nalgebra::geometry::UnitQuaternion::from_euler_angles(
