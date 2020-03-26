@@ -15,6 +15,10 @@ lsm303dlhc = "0.2.0"
 l3gd20 = "0.2.0"
 cortex-m-semihosting = "0.3.5"
 
+[dependencies.num-traits]
+version = "0.2"
+default-features = false
+
 [dependencies.rc_framing]
 path = "../rc_framing"
 
