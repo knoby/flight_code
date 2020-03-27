@@ -74,7 +74,6 @@ impl Sensors {
         // Calculate the Offset of the gyre reading by reading 100 Values and divinding the sum by
         // 100
         let mut gyro_offset = Vector::zeros();
-        let mut acc_offset = Vector::zeros();
         for _ in 0..100 {
             let reading = self.gyro.gyro().unwrap();
             gyro_offset.x += self.gyro_scale.radians(reading.x);
@@ -111,7 +110,7 @@ impl Sensors {
         );
 
         // Calculate mag vector in body frame
-        let mut mag_body = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
+        let mag_body = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
 
         // Convert gravity Vector to world frame with estimation of orientation from last cycle
         let mut acc_world = self.angle.transform_vector(&acc_body);

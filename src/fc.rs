@@ -1,7 +1,5 @@
 use num_traits::float::FloatCore;
 
-type Vector = nalgebra::Vector3<f32>;
-
 pub struct FlighController {
     roll_vel_ctrl: PIDController<f32>,
     pitch_vel_ctrl: PIDController<f32>,
@@ -100,6 +98,7 @@ where
     }
 
     /// Reset the Integral Value and the saved value for calculating the Derivative value.
+    #[allow(unused)]
     pub fn reset(&mut self) {
         self.integral = T::zero();
         self.last_error = None;

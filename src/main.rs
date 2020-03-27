@@ -20,7 +20,6 @@ use heapless::{
 };
 
 extern crate cortex_m_semihosting;
-use cortex_m_semihosting::hprintln;
 
 mod fc;
 mod led;
@@ -241,17 +240,29 @@ const APP: () = {
 
     /// Periodic task for real time critical things
     #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, PROD_MOTION_TO_IDLE, MOTORS])]
+    #[allow(deprecated)] // Replacementfunction is not implemented in nalgebra::RealField::abs ...
     fn periodic_task(cx: periodic_task::Context) {
+        static mut RUNNING: bool = true;
         // Update orientation
         cx.resources.SENSORS.update(cx.resources.MOTORS.period());
+        let angle_vel = cx.resources.SENSORS.angle_vel();
+        let angle_pos = cx.resources.SENSORS.euler_angles();
+        // Check Angle. If roll or pitch higher than 20° switch off
+        //
+        use nalgebra::abs;
+        if (abs(&angle_pos.0) > 20.0) | (abs(&angle_pos.1) > 20.0) | (abs(&angle_pos.2) > 20.0) {
+            *RUNNING = false;
+        }
 
-        let (vl, vr, hl, hr) = cx.resources.FC.update(
-            cx.resources.SENSORS.angle_vel(),
-            cx.resources.SENSORS.euler_angles(),
-            cx.resources.MOTORS.period(),
-        );
-
-        cx.resources.MOTORS.set_speed(vl, vr, hl, hr);
+        if *RUNNING {
+            let (vl, vr, hl, hr) =
+                cx.resources
+                    .FC
+                    .update(angle_vel, angle_pos, cx.resources.MOTORS.period());
+            cx.resources.MOTORS.set_speed(vl, vr, hl, hr);
+        } else {
+            cx.resources.MOTORS.set_speed(0.0, 0.0, 0.0, 0.0);
+        }
 
         cx.resources
             .PROD_MOTION_TO_IDLE
