@@ -146,4 +146,14 @@ impl Sensors {
         );
         self.angle *= delta_angle;
     }
+
+    /// Get roll pitch and yaw angle vel
+    pub fn angle_vel(&self) -> (f32, f32, f32) {
+        (self.angle_vel.x, self.angle_vel.y, self.angle_vel.z)
+    }
+
+    /// Get Euler Angles
+    pub fn euler_angles(&self) -> (f32, f32, f32) {
+        self.angle.euler_angles()
+    }
 }

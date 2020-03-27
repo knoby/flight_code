@@ -184,7 +184,7 @@ const APP: () = {
             LED_N: led_n,
             LED_NE: led_ne,
             LED_E: led_e,
-            FC: fc::FlighController::new(),
+            FC: fc::FlighController::default(),
         }
     }
 
@@ -245,13 +245,17 @@ const APP: () = {
         // Update orientation
         cx.resources.SENSORS.update(cx.resources.MOTORS.period());
 
-        cx.resources.FC.update();
+        let (vl, vr, hl, hr) = cx.resources.FC.update(
+            cx.resources.SENSORS.angle_vel(),
+            cx.resources.SENSORS.euler_angles(),
+            cx.resources.MOTORS.period(),
+        );
 
-        cx.resources.MOTORS.set_speed(0.0, 0.0, 0.0, 0.0);
+        cx.resources.MOTORS.set_speed(vl, vr, hl, hr);
 
         cx.resources
             .PROD_MOTION_TO_IDLE
-            .enqueue(cx.resources.SENSORS.angle.euler_angles())
+            .enqueue(cx.resources.SENSORS.euler_angles())
             .ok();
         // Reset the ISR Flag
         cx.resources.MOTORS.reset_isr_flag();

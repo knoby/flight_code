@@ -1,15 +1,56 @@
 use num_traits::float::FloatCore;
 
-pub struct FlighController {}
+type Vector = nalgebra::Vector3<f32>;
+
+pub struct FlighController {
+    roll_vel_ctrl: PIDController<f32>,
+    pitch_vel_ctrl: PIDController<f32>,
+    yaw_vel_ctrl: PIDController<f32>,
+
+    roll_pos_ctrl: PIDController<f32>,
+    pitch_pos_ctrl: PIDController<f32>,
+}
+
+impl Default for FlighController {
+    /// Create a new Flight Controller and init it
+    fn default() -> FlighController {
+        FlighController {
+            roll_vel_ctrl: PIDController::new(1.0, None, None, -10.0, 10.0, 0.0),
+            pitch_vel_ctrl: PIDController::new(1.0, None, None, -10.0, 10.0, 0.0),
+            yaw_vel_ctrl: PIDController::new(1.0, None, None, -10.0, 10.0, 0.0),
+
+            roll_pos_ctrl: PIDController::new(0.0, None, None, -5.0, 5.0, 0.0),
+            pitch_pos_ctrl: PIDController::new(0.0, None, None, -5.0, 5.0, 0.0),
+        }
+    }
+}
 
 impl FlighController {
-    /// Create a new Flight Controller and init it
-    pub fn new() -> FlighController {
-        FlighController {}
-    }
-
     /// Calculate the FlightController
-    pub fn update(&mut self) {}
+    pub fn update(
+        &mut self,
+        angle_vel: (f32, f32, f32),
+        angle_pos: (f32, f32, f32),
+        dt: f32,
+    ) -> (f32, f32, f32, f32) {
+        // Angle Controll
+        self.roll_vel_ctrl.setpoint = self.roll_pos_ctrl.calc_next_output(angle_pos.0, dt);
+        self.pitch_vel_ctrl.setpoint = self.pitch_pos_ctrl.calc_next_output(angle_pos.0, dt);
+        self.yaw_vel_ctrl.setpoint = 0.0;
+
+        // Angle Velocity Control
+        let roll_set = self.roll_vel_ctrl.calc_next_output(angle_vel.0, dt);
+        let pitch_set = self.pitch_vel_ctrl.calc_next_output(angle_vel.1, dt);
+        let yaw_set = self.yaw_vel_ctrl.calc_next_output(angle_vel.2, dt);
+
+        // Calculate the setpoint for the different Motors
+        let vl = roll_set + pitch_set + yaw_set;
+        let vr = -roll_set + pitch_set - yaw_set;
+        let hl = roll_set - pitch_set - yaw_set;
+        let hr = -roll_set - pitch_set + yaw_set;
+
+        (vl, vr, hl, hr)
+    }
 }
 
 #[allow(non_snake_case)]
@@ -42,8 +83,8 @@ where
         K_p: T,
         T_i: Option<T>,
         T_d: Option<T>,
-        limit_pos: T,
         limit_neg: T,
+        limit_pos: T,
         setpoint: T,
     ) -> Self {
         PIDController {
