@@ -18,6 +18,7 @@ type PwmHR =
 type Timer = hal::device::TIM3;
 
 pub struct Motors {
+    armed: bool,
     pwm_vl: PwmVL,
     pwm_vr: PwmVR,
     pwm_hl: PwmHL,
@@ -68,6 +69,7 @@ impl Motors {
         timer.enable();
 
         let mut motors = Self {
+            armed: false,
             pwm_vl: vl,
             pwm_vr: vr,
             pwm_hl: hl,
@@ -77,16 +79,8 @@ impl Motors {
             timer,
         };
 
-        // Arm Motors
-        motors.stop();
-        cortex_m::asm::delay(32_000_000);
-
-        // Spinn Motors for 1 second
-        motors.set_speed(10.0, 10.0, 10.0, 10.0);
-        cortex_m::asm::delay(32_000_000);
-
-        // Stop Motors again
-        motors.stop();
+        // Disable the Motors
+        motors.disable();
 
         // Return the Motor Struct:
         motors
@@ -96,15 +90,33 @@ impl Motors {
     /// Allowed values are from 0.0 (Stop), 100.0 (Full Speed)
     /// Values out of this range will be limited to the range
     pub fn set_speed(&mut self, vl: f32, vr: f32, hl: f32, hr: f32) {
-        self.pwm_vl.set_duty(self.speed_to_duty(vl));
-        self.pwm_vr.set_duty(self.speed_to_duty(vr));
-        self.pwm_hl.set_duty(self.speed_to_duty(hl));
-        self.pwm_hr.set_duty(self.speed_to_duty(hr));
+        if self.armed {
+            self.pwm_vl.set_duty(self.speed_to_duty(vl));
+            self.pwm_vr.set_duty(self.speed_to_duty(vr));
+            self.pwm_hl.set_duty(self.speed_to_duty(hl));
+            self.pwm_hr.set_duty(self.speed_to_duty(hr));
+        };
     }
 
     /// Stop the Motors. Syntactic Sugar for motors.set_speed(0.0, 0.0, 0.0, 0.0);
     pub fn stop(&mut self) {
-        self.set_speed(0.0, 0.0, 0.0, 0.0);
+        if self.armed {
+            self.set_speed(0.0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    /// Disable the Motor Stages with setting the duty to zero
+    pub fn disable(&mut self) {
+        self.armed = false;
+        self.pwm_vl.set_duty(0);
+        self.pwm_vr.set_duty(0);
+        self.pwm_hl.set_duty(0);
+        self.pwm_hr.set_duty(0);
+    }
+
+    pub fn arm(&mut self) {
+        self.armed = true;
+        self.stop();
     }
 
     /// Calculate duty from set speed

@@ -19,7 +19,7 @@ use heapless::{
     spsc::{Consumer, Producer, Queue},
 };
 
-extern crate cortex_m_semihosting;
+use rtt_target::rprintln;
 
 mod fc;
 mod led;
@@ -38,9 +38,6 @@ const APP: () = {
         // Que for passing data from Serial Interrupt to Idle Task
         PROD_SERIAL_READ: Producer<'static, u8, U4>,
         CONS_SERIAL_READ: Consumer<'static, u8, U4>,
-
-        PROD_MOTION_TO_IDLE: Producer<'static, (f32, f32, f32), U4>,
-        CONS_MOTION_TO_IDLE: Consumer<'static, (f32, f32, f32), U4>,
 
         // Communication to Base Station
         SERIAL_RX: serial::SerialRx,
@@ -65,7 +62,11 @@ const APP: () = {
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U4>> = None;
-        static mut Q_MOTION_TO_IDLE: Option<Queue<(f32, f32, f32), U4>> = None;
+
+        // Init RTT Communictaion
+        rtt_target::rtt_init_print!();
+        rprintln!("Rustocupter Wakeup after reset.");
+        rprintln!("Start Init...");
 
         // Initialize (enable) the monotonic timer (CYCCNT)
         cx.core.DCB.enable_trace();
@@ -75,6 +76,7 @@ const APP: () = {
         let mut flash = cx.device.FLASH.constrain();
         let mut rcc = cx.device.RCC.constrain();
 
+        rprintln!("Setting Up Clocks");
         let clocks = rcc
             .cfgr
             .sysclk(64.mhz())
@@ -82,12 +84,14 @@ const APP: () = {
             .pclk2(64.mhz())
             .freeze(&mut flash.acr);
 
+        rprintln!("Config of on bord Leds");
         // Setup the on board LEDs
         let gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
         let led_n = gpioe.pe9.output().output_speed(hal::gpio::MediumSpeed);
         let led_ne = gpioe.pe10.output().output_speed(hal::gpio::MediumSpeed);
         let led_e = gpioe.pe11.output().output_speed(hal::gpio::MediumSpeed);
 
+        rprintln!("Setup I2C Bus for acceleration sensor");
         // Setup the I2C Bus for the Magneto and Accelero Meter
         let gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
         let scl = gpiob.pb6.alternating(hal::gpio::AF4);
@@ -96,6 +100,7 @@ const APP: () = {
 
         let acc_sensor = lsm303dlhc::Lsm303dlhc::new(i2c).unwrap();
 
+        rprintln!("Setup SPI Bus for gyro sensor");
         // Setup the Spi bus forthe Gyro
         let gpioa = cx.device.GPIOA.split(&mut rcc.ahb);
         let sck = gpioa
@@ -118,6 +123,7 @@ const APP: () = {
 
         let gyro_sensor = l3gd20::L3gd20::new(spi, nss).unwrap();
 
+        rprintln!("Configuration of PWM Output pins");
         // Create Pins for PWM Output to control the ESC
         let gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
         let pwm_pin_motor_vl = gpioc
@@ -137,14 +143,12 @@ const APP: () = {
             .alternating(hal::gpio::AF2)
             .output_speed(hal::gpio::HighSpeed);
 
+        rprintln!("Setup Communication Channel for Serail data to idle task");
         //Create que for serial read
         *Q_SERIAL_READ = Some(Queue::new());
         let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
 
-        //Create que for serial read
-        *Q_MOTION_TO_IDLE = Some(Queue::new());
-        let (psmt, csmt) = Q_MOTION_TO_IDLE.as_mut().unwrap().split();
-
+        rprintln!("Configuration of serial interface");
         // Create USART Port for communication to remote station
         let tx_pin = gpioc
             .pc4
@@ -164,9 +168,6 @@ const APP: () = {
         init::LateResources {
             PROD_SERIAL_READ: ps,
             CONS_SERIAL_READ: cs,
-
-            PROD_MOTION_TO_IDLE: psmt,
-            CONS_MOTION_TO_IDLE: csmt,
 
             SERIAL_RX: rx,
             SERIAL_TX: tx,
@@ -188,16 +189,13 @@ const APP: () = {
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CONS_SERIAL_READ, CONS_MOTION_TO_IDLE, LED_N, LED_NE, LED_E, SERIAL_TX])]
+    #[idle(resources = [CONS_SERIAL_READ, LED_N, LED_NE, LED_E, SERIAL_TX])]
     fn idle(cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U32>::new();
         let mut angle = (0.0, 0.0, 0.0);
         loop {
             // Toggle LED for Idle Mode is running
             cx.resources.LED_NE.toggle().unwrap();
-            if let Some(val) = cx.resources.CONS_MOTION_TO_IDLE.dequeue() {
-                angle = val;
-            }
             if let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
                 // Read from que
                 if serial::check_frame_end(val) {
@@ -239,7 +237,7 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, PROD_MOTION_TO_IDLE, MOTORS])]
+    #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, MOTORS])]
     #[allow(deprecated)] // Replacementfunction is not implemented in nalgebra::RealField::abs ...
     fn periodic_task(cx: periodic_task::Context) {
         static mut RUNNING: bool = true;
@@ -264,10 +262,6 @@ const APP: () = {
             cx.resources.MOTORS.set_speed(0.0, 0.0, 0.0, 0.0);
         }
 
-        cx.resources
-            .PROD_MOTION_TO_IDLE
-            .enqueue(cx.resources.SENSORS.euler_angles())
-            .ok();
         // Reset the ISR Flag
         cx.resources.MOTORS.reset_isr_flag();
     }
