@@ -28,7 +28,7 @@ mod position;
 mod serial;
 
 // Runtime Imports
-use rtfm::app;
+use rtic::app;
 
 // Program Constants
 

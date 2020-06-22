@@ -34,8 +34,8 @@ version = "0.19.0"
 path = "../alt-stm32f30x-hal"
 features = ["rt", "stm32f303"]
 
-[dependencies.cortex-m-rtfm]
-version = "0.5.1"
+[dependencies.cortex-m-rtic]
+version = "0.5.3"
 
 [dependencies.rtt-target]
 version = "0.2.0"
