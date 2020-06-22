@@ -114,7 +114,7 @@ impl Motors {
         self.pwm_hr.set_duty(0);
     }
 
-    pub fn arm(&mut self) {
+    pub fn enable(&mut self) {
         self.armed = true;
         self.stop();
     }

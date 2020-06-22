@@ -20,8 +20,8 @@ use heapless::{
 };
 
 use rtt_target::rprintln;
-
 mod fc;
+mod ipc;
 mod led;
 mod motors;
 mod position;
@@ -39,6 +39,10 @@ const APP: () = {
         PROD_SERIAL_READ: Producer<'static, u8, U4>,
         CONS_SERIAL_READ: Consumer<'static, u8, U4>,
 
+        // Que from idel to motion task to send commands to the control task
+        PROD_IDLE_TO_MOTION: Producer<'static, ipc::IPC, U4>,
+        CONS_IDLE_TO_MOTION: Consumer<'static, ipc::IPC, U4>,
+
         // Communication to Base Station
         SERIAL_RX: serial::SerialRx,
         SERIAL_TX: serial::SerialTx,
@@ -48,6 +52,10 @@ const APP: () = {
 
         // Motor Control
         MOTORS: motors::Motors,
+
+        // Motion State
+        MOTOR_STATE: copter_defs::MotorState,
+        ORIENTATION: (f32, f32, f32),
 
         // LEDs
         LED_N: led::LedN,
@@ -62,6 +70,7 @@ const APP: () = {
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U4>> = None;
+        static mut Q_IDLE_TO_MOTION: Option<Queue<ipc::IPC, U4>> = None;
 
         // Init RTT Communictaion
         rtt_target::rtt_init_print!();
@@ -143,10 +152,14 @@ const APP: () = {
             .alternating(hal::gpio::AF2)
             .output_speed(hal::gpio::HighSpeed);
 
-        rprintln!("Setup Communication Channel for Serail data to idle task");
+        rprintln!("Setup Communication Channel for Serial data to idle task");
         //Create que for serial read
         *Q_SERIAL_READ = Some(Queue::new());
         let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
+
+        rprintln!("Setup Commuincation Channel for Idle to Motion Task");
+        *Q_IDLE_TO_MOTION = Some(Queue::new());
+        let (pitm, citm) = Q_IDLE_TO_MOTION.as_mut().unwrap().split();
 
         rprintln!("Configuration of serial interface");
         // Create USART Port for communication to remote station
@@ -161,13 +174,16 @@ const APP: () = {
         let serial = cx
             .device
             .USART1
-            .serial((tx_pin, rx_pin), hal::time::Bps(9600), clocks);
+            .serial((tx_pin, rx_pin), hal::time::Bps(19200), clocks);
         let (tx, rx) = serial::create_tx_rx(serial);
 
         //Assign late resources
         init::LateResources {
             PROD_SERIAL_READ: ps,
             CONS_SERIAL_READ: cs,
+
+            PROD_IDLE_TO_MOTION: pitm,
+            CONS_IDLE_TO_MOTION: citm,
 
             SERIAL_RX: rx,
             SERIAL_TX: tx,
@@ -181,6 +197,10 @@ const APP: () = {
                 cx.device.TIM3,
                 clocks,
             ),
+
+            MOTOR_STATE: copter_defs::MotorState::default(),
+            ORIENTATION: (0.0, 0.0, 0.0),
+
             LED_N: led_n,
             LED_NE: led_ne,
             LED_E: led_e,
@@ -189,10 +209,9 @@ const APP: () = {
     }
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CONS_SERIAL_READ, LED_N, LED_NE, LED_E, SERIAL_TX])]
-    fn idle(cx: idle::Context) -> ! {
+    #[idle(resources = [CONS_SERIAL_READ, LED_N, LED_NE, LED_E, SERIAL_TX, PROD_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
+    fn idle(mut cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U32>::new();
-        let mut angle = (0.0, 0.0, 0.0);
         loop {
             // Toggle LED for Idle Mode is running
             cx.resources.LED_NE.toggle().unwrap();
@@ -208,10 +227,35 @@ const APP: () = {
                         match cmd {
                             // Execute Command
                             ToggleLed => cx.resources.LED_N.toggle().unwrap(),
+                            StartMotor => {
+                                cx.resources
+                                    .PROD_IDLE_TO_MOTION
+                                    .enqueue(ipc::IPC::EnableMotors)
+                                    .ok();
+                            }
+                            StopMotor => {
+                                cx.resources
+                                    .PROD_IDLE_TO_MOTION
+                                    .enqueue(ipc::IPC::DisableMotors)
+                                    .ok();
+                            }
                             GetMotionState => {
-                                let test_state = SendMotionState(nalgebra::Vector3::new(
-                                    angle.0, angle.1, angle.2,
-                                ));
+                                let mut orientation = (0.0, 0.0, 0.0);
+                                let mut armed = false;
+                                cx.resources
+                                    .ORIENTATION
+                                    .lock(|motion_value| orientation = motion_value.clone());
+                                cx.resources
+                                    .MOTOR_STATE
+                                    .lock(|motor_state| armed = motor_state.armed);
+                                let test_state = SendMotionState(
+                                    nalgebra::Vector3::new(
+                                        orientation.0,
+                                        orientation.1,
+                                        orientation.2,
+                                    ),
+                                    armed,
+                                );
                                 test_state
                                     .to_slip(&mut buffer)
                                     .and_then(|_| {
@@ -237,10 +281,18 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, MOTORS])]
+    #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, MOTORS, CONS_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
     #[allow(deprecated)] // Replacementfunction is not implemented in nalgebra::RealField::abs ...
     fn periodic_task(cx: periodic_task::Context) {
-        static mut RUNNING: bool = true;
+        // Read new command
+        if let Some(command) = cx.resources.CONS_IDLE_TO_MOTION.dequeue() {
+            match command {
+                ipc::IPC::EnableMotors => cx.resources.MOTOR_STATE.armed = true,
+                ipc::IPC::DisableMotors => cx.resources.MOTOR_STATE.armed = false,
+                _ => (),
+            }
+        }
+
         // Update orientation
         cx.resources.SENSORS.update(cx.resources.MOTORS.period());
         let angle_vel = cx.resources.SENSORS.angle_vel();
@@ -249,18 +301,21 @@ const APP: () = {
         //
         use nalgebra::abs;
         if (abs(&angle_pos.0) > 20.0) | (abs(&angle_pos.1) > 20.0) | (abs(&angle_pos.2) > 20.0) {
-            *RUNNING = false;
+            cx.resources.MOTOR_STATE.armed = false;
         }
 
-        if *RUNNING {
+        if cx.resources.MOTOR_STATE.armed {
             let (vl, vr, hl, hr) =
                 cx.resources
                     .FC
                     .update(angle_vel, angle_pos, cx.resources.MOTORS.period());
             cx.resources.MOTORS.set_speed(vl, vr, hl, hr);
         } else {
-            cx.resources.MOTORS.set_speed(0.0, 0.0, 0.0, 0.0);
+            cx.resources.MOTORS.disable();
         }
+
+        // Save Temp Values to Resoruces
+        *cx.resources.ORIENTATION = angle_pos;
 
         // Reset the ISR Flag
         cx.resources.MOTORS.reset_isr_flag();
