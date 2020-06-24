@@ -36,8 +36,8 @@ use rtic::app;
 const APP: () = {
     struct Resources {
         // Que for passing data from Serial Interrupt to Idle Task
-        PROD_SERIAL_READ: Producer<'static, u8, U4>,
-        CONS_SERIAL_READ: Consumer<'static, u8, U4>,
+        PROD_SERIAL_READ: Producer<'static, u8, U32>,
+        CONS_SERIAL_READ: Consumer<'static, u8, U32>,
 
         // Que from idel to motion task to send commands to the control task
         PROD_IDLE_TO_MOTION: Producer<'static, ipc::IPC, U4>,
@@ -55,7 +55,7 @@ const APP: () = {
 
         // Motion State
         MOTOR_STATE: copter_defs::MotorState,
-        ORIENTATION: (f32, f32, f32),
+        ORIENTATION: [f32; 3],
 
         // LEDs
         LED_N: led::LedN,
@@ -69,7 +69,7 @@ const APP: () = {
     #[init()]
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
-        static mut Q_SERIAL_READ: Option<Queue<u8, U4>> = None;
+        static mut Q_SERIAL_READ: Option<Queue<u8, U32>> = None;
         static mut Q_IDLE_TO_MOTION: Option<Queue<ipc::IPC, U4>> = None;
 
         // Init RTT Communictaion
@@ -199,7 +199,7 @@ const APP: () = {
             ),
 
             MOTOR_STATE: copter_defs::MotorState::default(),
-            ORIENTATION: (0.0, 0.0, 0.0),
+            ORIENTATION: [0.0_f32; 3],
 
             LED_N: led_n,
             LED_NE: led_ne,
@@ -211,7 +211,7 @@ const APP: () = {
     /// Idle Task for non critical jobs
     #[idle(resources = [CONS_SERIAL_READ, LED_N, LED_NE, LED_E, SERIAL_TX, PROD_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
     fn idle(mut cx: idle::Context) -> ! {
-        let mut buffer = heapless::Vec::<u8, U32>::new();
+        let mut buffer = heapless::Vec::<u8, U64>::new();
         loop {
             // Toggle LED for Idle Mode is running
             cx.resources.LED_NE.toggle().unwrap();
@@ -220,7 +220,7 @@ const APP: () = {
                 if serial::check_frame_end(val) {
                     // Check if byte is end from frame
                     if let Ok(cmd) = copter_defs::Command::from_slip(&buffer) {
-                        // Toggle LED for Reciving Data
+                        // Toggle LED for Command Recived
                         cx.resources.LED_E.toggle().unwrap();
                         // Try to decode
                         use copter_defs::Command::*;
@@ -240,22 +240,20 @@ const APP: () = {
                                     .ok();
                             }
                             GetMotionState => {
-                                let mut orientation = (0.0, 0.0, 0.0);
+                                let mut orientation = [0.0_f32; 3];
+                                let mut motor_speed = [0.0_f32; 4];
                                 let mut armed = false;
                                 cx.resources
                                     .ORIENTATION
                                     .lock(|motion_value| orientation = motion_value.clone());
-                                cx.resources
-                                    .MOTOR_STATE
-                                    .lock(|motor_state| armed = motor_state.armed);
-                                let test_state = SendMotionState(
-                                    nalgebra::Vector3::new(
-                                        orientation.0,
-                                        orientation.1,
-                                        orientation.2,
-                                    ),
-                                    armed,
-                                );
+                                cx.resources.MOTOR_STATE.lock(|motor_state| {
+                                    armed = motor_state.armed;
+                                    motor_speed[0] = motor_state.front_left;
+                                    motor_speed[1] = motor_state.front_right;
+                                    motor_speed[2] = motor_state.rear_left;
+                                    motor_speed[3] = motor_state.rear_right;
+                                });
+                                let test_state = SendMotionState(orientation, motor_speed, armed);
                                 test_state
                                     .to_slip(&mut buffer)
                                     .and_then(|_| {
@@ -267,6 +265,14 @@ const APP: () = {
                                             .map_err(|_| ())
                                     })
                                     .ok(); // Ignore if not working
+                            }
+                            SetTargetMotorSpeed(set_motor_speed) => {
+                                cx.resources
+                                    .PROD_IDLE_TO_MOTION
+                                    .enqueue(ipc::IPC::SetCtrlMode(ipc::CtrlMode::DirectCtrl(
+                                        set_motor_speed,
+                                    )))
+                                    .ok();
                             }
                             _ => (),
                         }
@@ -289,33 +295,47 @@ const APP: () = {
             match command {
                 ipc::IPC::EnableMotors => cx.resources.MOTOR_STATE.armed = true,
                 ipc::IPC::DisableMotors => cx.resources.MOTOR_STATE.armed = false,
-                _ => (),
+                ipc::IPC::SetCtrlMode(ctrl_mode) => match ctrl_mode {
+                    ipc::CtrlMode::DirectCtrl(speed) => {
+                        cx.resources.MOTOR_STATE.front_left = speed[0].max(0.0).min(100.0);
+                        cx.resources.MOTOR_STATE.front_right = speed[1].max(0.0).min(100.0);
+                        cx.resources.MOTOR_STATE.rear_left = speed[2].max(0.0).min(100.0);
+                        cx.resources.MOTOR_STATE.rear_right = speed[3].max(0.0).min(100.0);
+                    }
+                    _ => (),
+                },
             }
         }
 
         // Update orientation
         cx.resources.SENSORS.update(cx.resources.MOTORS.period());
-        let angle_vel = cx.resources.SENSORS.angle_vel();
         let angle_pos = cx.resources.SENSORS.euler_angles();
+
         // Check Angle. If roll or pitch higher than 20° switch off
-        //
         use nalgebra::abs;
-        if (abs(&angle_pos.0) > 20.0) | (abs(&angle_pos.1) > 20.0) | (abs(&angle_pos.2) > 20.0) {
+        let max_angle = 20.0 * (core::f32::consts::PI * 2.0) / 360.0;
+        if (abs(&angle_pos.0) > max_angle) || (abs(&angle_pos.1) > max_angle) {
             cx.resources.MOTOR_STATE.armed = false;
         }
 
         if cx.resources.MOTOR_STATE.armed {
-            let (vl, vr, hl, hr) =
-                cx.resources
-                    .FC
-                    .update(angle_vel, angle_pos, cx.resources.MOTORS.period());
-            cx.resources.MOTORS.set_speed(vl, vr, hl, hr);
+            cx.resources.MOTORS.enable();
+            cx.resources.MOTORS.set_speed(
+                cx.resources.MOTOR_STATE.front_left,
+                cx.resources.MOTOR_STATE.front_right,
+                cx.resources.MOTOR_STATE.rear_left,
+                cx.resources.MOTOR_STATE.rear_right,
+            );
         } else {
+            cx.resources.MOTOR_STATE.front_right = 0.0;
+            cx.resources.MOTOR_STATE.front_left = 0.0;
+            cx.resources.MOTOR_STATE.rear_left = 0.0;
+            cx.resources.MOTOR_STATE.rear_right = 0.0;
             cx.resources.MOTORS.disable();
         }
 
         // Save Temp Values to Resoruces
-        *cx.resources.ORIENTATION = angle_pos;
+        *cx.resources.ORIENTATION = [angle_pos.0, angle_pos.1, angle_pos.2];
 
         // Reset the ISR Flag
         cx.resources.MOTORS.reset_isr_flag();
@@ -331,9 +351,11 @@ const APP: () = {
             }
             Err(nb::Error::Other(e)) => {
                 if let hal::serial::Error::Overrun = e {
+                    rprintln!("Serial Overrun Error");
                     cx.resources.SERIAL_RX.clear_overrun_error();
                 } else {
                     // Ignore other Errors
+                    rprintln!("Other Serial Error");
                 }
             }
             Err(nb::Error::WouldBlock) => {} // Ignore errors
@@ -345,3 +367,21 @@ const APP: () = {
         fn EXTI0();
     }
 };
+
+#[no_mangle]
+fn fminf(a: f32, b: f32) -> f32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+#[no_mangle]
+fn fmaxf(a: f32, b: f32) -> f32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
