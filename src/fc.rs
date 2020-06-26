@@ -1,5 +1,15 @@
 use num_traits::float::FloatCore;
 
+/// States for the state machine in the high task
+#[derive(Copy, Clone, PartialEq)]
+pub enum ControlState {
+    Disabled,
+    Arming,
+    ChooseCtrlMode,
+    DirectControl,
+    AngleControl,
+}
+
 pub struct FlighController {
     roll_vel_ctrl: PIDController<f32>,
     pitch_vel_ctrl: PIDController<f32>,

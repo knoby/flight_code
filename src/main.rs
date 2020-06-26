@@ -61,9 +61,6 @@ const APP: () = {
         LED_N: led::LedN,
         LED_NE: led::LedNE,
         LED_E: led::LedE,
-
-        // Flight Controller
-        FC: fc::FlighController,
     }
 
     #[init()]
@@ -204,7 +201,6 @@ const APP: () = {
             LED_N: led_n,
             LED_NE: led_ne,
             LED_E: led_e,
-            FC: fc::FlighController::default(),
         }
     }
 
@@ -245,7 +241,7 @@ const APP: () = {
                                 let mut armed = false;
                                 cx.resources
                                     .ORIENTATION
-                                    .lock(|motion_value| orientation = motion_value.clone());
+                                    .lock(|&mut motion_value| orientation = motion_value);
                                 cx.resources.MOTOR_STATE.lock(|motor_state| {
                                     armed = motor_state.armed;
                                     motor_speed[0] = motor_state.front_left;
@@ -287,58 +283,155 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(binds = TIM3, priority = 5 , resources = [FC, SENSORS, MOTORS, CONS_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
+    #[task(binds = TIM3, priority = 5 , resources = [ SENSORS, MOTORS, CONS_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
     #[allow(deprecated)] // Replacementfunction is not implemented in nalgebra::RealField::abs ...
     fn periodic_task(cx: periodic_task::Context) {
+        // Local Vars for this task
+        static mut STATE: fc::ControlState = fc::ControlState::Disabled;
+        static mut OLD_STATE: fc::ControlState = fc::ControlState::Disabled;
+        static mut CYCLE_COUNT: u32 = 0;
+        static mut CTRL_MODE: ipc::CtrlMode = ipc::CtrlMode::DirectCtrl([0.0; 4]);
+        static mut FC: Option<fc::FlighController> = None;
+
+        // Create FC in first run
+        if FC.is_none() {
+            *FC = Some(fc::FlighController::default());
+        }
+
+        // Destructing Resources for easy access
+        let MOTOR_STATE = cx.resources.MOTOR_STATE;
+        let MOTORS = cx.resources.MOTORS;
+
         // Read new command
         if let Some(command) = cx.resources.CONS_IDLE_TO_MOTION.dequeue() {
             match command {
-                ipc::IPC::EnableMotors => cx.resources.MOTOR_STATE.armed = true,
-                ipc::IPC::DisableMotors => cx.resources.MOTOR_STATE.armed = false,
-                ipc::IPC::SetCtrlMode(ctrl_mode) => match ctrl_mode {
-                    ipc::CtrlMode::DirectCtrl(speed) => {
-                        cx.resources.MOTOR_STATE.front_left = speed[0].max(0.0).min(100.0);
-                        cx.resources.MOTOR_STATE.front_right = speed[1].max(0.0).min(100.0);
-                        cx.resources.MOTOR_STATE.rear_left = speed[2].max(0.0).min(100.0);
-                        cx.resources.MOTOR_STATE.rear_right = speed[3].max(0.0).min(100.0);
+                ipc::IPC::EnableMotors => MOTOR_STATE.armed = true,
+                ipc::IPC::DisableMotors => MOTOR_STATE.armed = false,
+                ipc::IPC::SetCtrlMode(ctrl_mode) => {
+                    // Limit the set value
+                    match ctrl_mode {
+                        ipc::CtrlMode::DirectCtrl(mut speed) => {
+                            for i in 0..4 {
+                                speed[i] = speed[i].min(100.0).max(0.0);
+                            }
+                            *CTRL_MODE = ipc::CtrlMode::DirectCtrl(speed)
+                        }
+                        ipc::CtrlMode::AngleCtrl(mut angle) => {
+                            for i in 0..3 {
+                                angle[i] = angle[i].min(10.0).max(-10.0);
+                            }
+                        }
                     }
-                    _ => (),
-                },
+                }
             }
         }
 
         // Update orientation
-        cx.resources.SENSORS.update(cx.resources.MOTORS.period());
+        cx.resources.SENSORS.update(MOTORS.period());
         let angle_pos = cx.resources.SENSORS.euler_angles();
+        let angle_vel = cx.resources.SENSORS.angle_vel();
 
         // Check Angle. If roll or pitch higher than 20° switch off
         use nalgebra::abs;
         let max_angle = 20.0 * (core::f32::consts::PI * 2.0) / 360.0;
         if (abs(&angle_pos.0) > max_angle) || (abs(&angle_pos.1) > max_angle) {
-            cx.resources.MOTOR_STATE.armed = false;
+            MOTOR_STATE.armed = false;
         }
 
-        if cx.resources.MOTOR_STATE.armed {
-            cx.resources.MOTORS.enable();
-            cx.resources.MOTORS.set_speed(
-                cx.resources.MOTOR_STATE.front_left,
-                cx.resources.MOTOR_STATE.front_right,
-                cx.resources.MOTOR_STATE.rear_left,
-                cx.resources.MOTOR_STATE.rear_right,
-            );
-        } else {
-            cx.resources.MOTOR_STATE.front_right = 0.0;
-            cx.resources.MOTOR_STATE.front_left = 0.0;
-            cx.resources.MOTOR_STATE.rear_left = 0.0;
-            cx.resources.MOTOR_STATE.rear_right = 0.0;
-            cx.resources.MOTORS.disable();
+        // Switch to disabled always from here
+        if !MOTOR_STATE.armed {
+            *STATE = fc::ControlState::Disabled;
         }
+
+        // State machine handling
+        if *STATE != *OLD_STATE {
+            *CYCLE_COUNT = 0;
+        };
+        *OLD_STATE = *STATE;
+        *CYCLE_COUNT = (*CYCLE_COUNT).wrapping_add(1);
+
+        // State machien in this task
+        match *STATE {
+            // Just disable and wait for enabling of the motors
+            fc::ControlState::Disabled => {
+                // Disable Motors
+                MOTORS.disable();
+                // Reset Motor State
+                MOTOR_STATE.front_left = 0.0;
+                MOTOR_STATE.front_right = 0.0;
+                MOTOR_STATE.rear_left = 0.0;
+                MOTOR_STATE.rear_right = 0.0;
+                if MOTOR_STATE.armed {
+                    *STATE = fc::ControlState::Arming;
+                    MOTORS.enable();
+                };
+            }
+            // Arm the motors. We have to wait some time. For example 50 cycles ...
+            fc::ControlState::Arming => {
+                if *CYCLE_COUNT == 50 {
+                    *STATE = fc::ControlState::ChooseCtrlMode;
+                }
+            }
+            // Change Ctrl Mode
+            fc::ControlState::ChooseCtrlMode => {
+                match *CTRL_MODE {
+                    ipc::CtrlMode::DirectCtrl(_) => *STATE = fc::ControlState::DirectControl,
+                    ipc::CtrlMode::AngleCtrl(_) => *STATE = fc::ControlState::AngleControl,
+                };
+            }
+            // Direct Ctrl Mode. Motor Speed is set from serial interface direct
+            fc::ControlState::DirectControl => {
+                if let ipc::CtrlMode::DirectCtrl(set_speed) = *CTRL_MODE {
+                    let delta_up = 1.0_f32;
+                    let delta_down = 2.0_f32;
+                    // Calculate new setpoint
+                    MOTOR_STATE.front_left += (set_speed[0] - MOTOR_STATE.front_left)
+                        .min(delta_up)
+                        .max(-delta_down);
+                    MOTOR_STATE.front_right += (set_speed[1] - MOTOR_STATE.front_right)
+                        .min(delta_up)
+                        .max(-delta_down);
+                    MOTOR_STATE.rear_left += (set_speed[2] - MOTOR_STATE.rear_left)
+                        .min(delta_up)
+                        .max(-delta_down);
+                    MOTOR_STATE.rear_right += (set_speed[3] - MOTOR_STATE.rear_right)
+                        .min(delta_up)
+                        .max(-delta_down);
+                } else {
+                    // Ctrl mode has changed --> Do the switching
+                    *STATE = fc::ControlState::ChooseCtrlMode;
+                };
+            }
+            // Angle control with flight controller
+            fc::ControlState::AngleControl => {
+                if let ipc::CtrlMode::AngleCtrl(_set_angle) = *CTRL_MODE {
+                    if let Some(fc) = &mut *FC {
+                        let (fl, fr, rl, rr) = fc.update(angle_vel, angle_pos, MOTORS.period());
+                        MOTOR_STATE.front_left = fl;
+                        MOTOR_STATE.front_right = fr;
+                        MOTOR_STATE.rear_left = rl;
+                        MOTOR_STATE.rear_right = rr;
+                    }
+                } else {
+                    // Ctrl mode has changed --> Do the switching
+                    *STATE = fc::ControlState::ChooseCtrlMode;
+                };
+            }
+        }
+
+        // Set Motor Speed
+        MOTORS.set_speed(
+            MOTOR_STATE.front_left,
+            MOTOR_STATE.front_right,
+            MOTOR_STATE.rear_left,
+            MOTOR_STATE.rear_right,
+        );
 
         // Save Temp Values to Resoruces
         *cx.resources.ORIENTATION = [angle_pos.0, angle_pos.1, angle_pos.2];
 
         // Reset the ISR Flag
-        cx.resources.MOTORS.reset_isr_flag();
+        MOTORS.reset_isr_flag();
     }
 
     /// Interrupt for reciving bytes from serial and sending to idle task
