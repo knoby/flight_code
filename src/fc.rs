@@ -1,5 +1,7 @@
 use num_traits::float::FloatCore;
 
+use core::f32::consts::PI;
+
 /// States for the state machine in the high task
 #[derive(Copy, Clone, PartialEq)]
 pub enum ControlState {
@@ -23,12 +25,40 @@ impl Default for FlighController {
     /// Create a new Flight Controller and init it
     fn default() -> FlighController {
         FlighController {
-            roll_vel_ctrl: PIDController::new(1.0, None, None, -10.0, 10.0, 0.0),
-            pitch_vel_ctrl: PIDController::new(1.0, None, None, -10.0, 10.0, 0.0),
+            roll_vel_ctrl: PIDController::new(
+                360.0 / (2.0 * PI) * 0.5,
+                None,
+                None,
+                -10.0,
+                10.0,
+                0.0,
+            ),
+            pitch_vel_ctrl: PIDController::new(
+                360.0 / (2.0 * PI) * 0.5,
+                None,
+                None,
+                -10.0,
+                10.0,
+                0.0,
+            ),
             yaw_vel_ctrl: PIDController::new(1.0, None, None, -10.0, 10.0, 0.0),
 
-            roll_pos_ctrl: PIDController::new(0.0, None, None, -5.0, 5.0, 0.0),
-            pitch_pos_ctrl: PIDController::new(0.0, None, None, -5.0, 5.0, 0.0),
+            roll_pos_ctrl: PIDController::new(
+                1.0,
+                None,
+                None,
+                -20.0 / 360.0 * 2.0 * PI,
+                20.0 / 360.0 * 2.0 * PI,
+                0.0,
+            ),
+            pitch_pos_ctrl: PIDController::new(
+                1.0,
+                None,
+                None,
+                -20.0 / 360.0 * 2.0 * PI,
+                20.0 / 360.0 * 2.0 * PI,
+                0.0,
+            ),
         }
     }
 }
@@ -43,19 +73,19 @@ impl FlighController {
     ) -> (f32, f32, f32, f32) {
         // Angle Controll
         self.roll_vel_ctrl.setpoint = self.roll_pos_ctrl.calc_next_output(angle_pos.0, dt);
-        self.pitch_vel_ctrl.setpoint = self.pitch_pos_ctrl.calc_next_output(angle_pos.0, dt);
+        self.pitch_vel_ctrl.setpoint = self.pitch_pos_ctrl.calc_next_output(angle_pos.1, dt);
         self.yaw_vel_ctrl.setpoint = 0.0;
 
         // Angle Velocity Control
         let roll_set = self.roll_vel_ctrl.calc_next_output(angle_vel.0, dt);
         let pitch_set = self.pitch_vel_ctrl.calc_next_output(angle_vel.1, dt);
-        let yaw_set = self.yaw_vel_ctrl.calc_next_output(angle_vel.2, dt);
+        let yaw_set = self.yaw_vel_ctrl.calc_next_output(0.0, dt);
 
         // Calculate the setpoint for the different Motors
-        let vl = roll_set + pitch_set + yaw_set;
-        let vr = -roll_set + pitch_set - yaw_set;
-        let hl = roll_set - pitch_set - yaw_set;
-        let hr = -roll_set - pitch_set + yaw_set;
+        let vl = roll_set + pitch_set;
+        let vr = -roll_set + pitch_set;
+        let hl = roll_set - pitch_set;
+        let hr = -roll_set - pitch_set;
 
         (vl, vr, hl, hr)
     }
