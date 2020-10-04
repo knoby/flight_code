@@ -160,18 +160,19 @@ const APP: () = {
 
         rprintln!("Configuration of serial interface");
         // Create USART Port for communication to remote station
-        let tx_pin = gpioc
-            .pc4
+        let gpiod = cx.device.GPIOD.split(&mut rcc.ahb);
+        let tx_pin = gpiod
+            .pd5
             .alternating(hal::gpio::AF7)
             .output_speed(hal::gpio::HighSpeed);
-        let rx_pin = gpioc
-            .pc5
+        let rx_pin = gpiod
+            .pd6
             .alternating(hal::gpio::AF7)
             .output_speed(hal::gpio::HighSpeed);
         let serial = cx
             .device
-            .USART1
-            .serial((tx_pin, rx_pin), hal::time::Bps(19200), clocks);
+            .USART2
+            .serial((tx_pin, rx_pin), hal::time::Bps(38400), clocks);
         let (tx, rx) = serial::create_tx_rx(serial);
 
         //Assign late resources
@@ -210,8 +211,8 @@ const APP: () = {
         let mut buffer = heapless::Vec::<u8, U64>::new();
         loop {
             // Toggle LED for Idle Mode is running
-            cx.resources.LED_NE.toggle().unwrap();
             if let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
+                cx.resources.LED_NE.toggle().unwrap();
                 // Read from que
                 if serial::check_frame_end(val) {
                     // Check if byte is end from frame
@@ -265,9 +266,17 @@ const APP: () = {
                             SetTargetMotorSpeed(set_motor_speed) => {
                                 cx.resources
                                     .PROD_IDLE_TO_MOTION
-                                    .enqueue(ipc::IPC::SetCtrlMode(ipc::CtrlMode::DirectCtrl(
-                                        set_motor_speed,
-                                    )))
+                                    .enqueue(ipc::IPC::SetCtrlMode(
+                                        copter_defs::CtrlMode::DirectCtrl(set_motor_speed),
+                                    ))
+                                    .ok();
+                            }
+                            SetTargetAngle(set_angle) => {
+                                cx.resources
+                                    .PROD_IDLE_TO_MOTION
+                                    .enqueue(ipc::IPC::SetCtrlMode(
+                                        copter_defs::CtrlMode::AngleCtrl(set_angle),
+                                    ))
                                     .ok();
                             }
                             _ => (),
@@ -290,7 +299,7 @@ const APP: () = {
         static mut STATE: fc::ControlState = fc::ControlState::Disabled;
         static mut OLD_STATE: fc::ControlState = fc::ControlState::Disabled;
         static mut CYCLE_COUNT: u32 = 0;
-        static mut CTRL_MODE: ipc::CtrlMode = ipc::CtrlMode::DirectCtrl([0.0; 4]);
+        static mut CTRL_MODE: copter_defs::CtrlMode = copter_defs::CtrlMode::DirectCtrl([0.0; 4]);
         static mut FC: Option<fc::FlighController> = None;
 
         // Create FC in first run
@@ -310,16 +319,17 @@ const APP: () = {
                 ipc::IPC::SetCtrlMode(ctrl_mode) => {
                     // Limit the set value
                     match ctrl_mode {
-                        ipc::CtrlMode::DirectCtrl(mut speed) => {
+                        copter_defs::CtrlMode::DirectCtrl(mut speed) => {
                             for i in 0..4 {
                                 speed[i] = speed[i].min(100.0).max(0.0);
                             }
-                            *CTRL_MODE = ipc::CtrlMode::DirectCtrl(speed)
+                            *CTRL_MODE = copter_defs::CtrlMode::DirectCtrl(speed);
                         }
-                        ipc::CtrlMode::AngleCtrl(mut angle) => {
+                        copter_defs::CtrlMode::AngleCtrl(mut angle) => {
                             for i in 0..3 {
                                 angle[i] = angle[i].min(10.0).max(-10.0);
                             }
+                            *CTRL_MODE = copter_defs::CtrlMode::AngleCtrl(angle);
                         }
                     }
                 }
@@ -374,14 +384,19 @@ const APP: () = {
             }
             // Change Ctrl Mode
             fc::ControlState::ChooseCtrlMode => {
+                rprintln!("Changed Ctrl Mode: {:?}", *CTRL_MODE);
                 match *CTRL_MODE {
-                    ipc::CtrlMode::DirectCtrl(_) => *STATE = fc::ControlState::DirectControl,
-                    ipc::CtrlMode::AngleCtrl(_) => *STATE = fc::ControlState::AngleControl,
+                    copter_defs::CtrlMode::DirectCtrl(_) => {
+                        *STATE = fc::ControlState::DirectControl;
+                    }
+                    copter_defs::CtrlMode::AngleCtrl(_) => {
+                        *STATE = fc::ControlState::AngleControl;
+                    }
                 };
             }
             // Direct Ctrl Mode. Motor Speed is set from serial interface direct
             fc::ControlState::DirectControl => {
-                if let ipc::CtrlMode::DirectCtrl(set_speed) = *CTRL_MODE {
+                if let copter_defs::CtrlMode::DirectCtrl(set_speed) = *CTRL_MODE {
                     let delta_up = 1.0_f32;
                     let delta_down = 2.0_f32;
                     // Calculate new setpoint
@@ -404,13 +419,13 @@ const APP: () = {
             }
             // Angle control with flight controller
             fc::ControlState::AngleControl => {
-                if let ipc::CtrlMode::AngleCtrl(_set_angle) = *CTRL_MODE {
+                if let copter_defs::CtrlMode::AngleCtrl(_set_angle) = *CTRL_MODE {
                     if let Some(fc) = &mut *FC {
                         let (fl, fr, rl, rr) = fc.update(angle_vel, angle_pos, MOTORS.period());
-                        MOTOR_STATE.front_left = fl;
-                        MOTOR_STATE.front_right = fr;
-                        MOTOR_STATE.rear_left = rl;
-                        MOTOR_STATE.rear_right = rr;
+                        MOTOR_STATE.front_left = fl + 50.0;
+                        MOTOR_STATE.front_right = fr + 50.0;
+                        MOTOR_STATE.rear_left = rl + 50.0;
+                        MOTOR_STATE.rear_right = rr + 50.0;
                     }
                 } else {
                     // Ctrl mode has changed --> Do the switching
@@ -435,7 +450,7 @@ const APP: () = {
     }
 
     /// Interrupt for reciving bytes from serial and sending to idle task
-    #[task(binds = USART1_EXTI25, priority = 8, resources = [SERIAL_RX, PROD_SERIAL_READ])]
+    #[task(binds = USART2_EXTI26, priority = 8, resources = [SERIAL_RX, PROD_SERIAL_READ])]
     fn read_serial_byte(cx: read_serial_byte::Context) {
         match cx.resources.SERIAL_RX.read() {
             Ok(b) => {

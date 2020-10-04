@@ -1,14 +1,14 @@
-type SerialTxPin = hal::gpio::PC4<
+type SerialTxPin = hal::gpio::PD5<
     hal::gpio::PullNone,
     hal::gpio::AltFn<hal::gpio::AF7, hal::gpio::PushPull, hal::gpio::HighSpeed>,
 >;
 
-type SerialRxPin = hal::gpio::PC5<
+type SerialRxPin = hal::gpio::PD6<
     hal::gpio::PullNone,
     hal::gpio::AltFn<hal::gpio::AF7, hal::gpio::PushPull, hal::gpio::HighSpeed>,
 >;
 
-type SerialUart = hal::device::USART1;
+type SerialUart = hal::device::USART2;
 
 pub type SerialTx = hal::serial::Tx<SerialUart>;
 pub type SerialRx = hal::serial::Rx<SerialUart>;

@@ -100,20 +100,20 @@ impl Sensors {
 
         // Convert Gyrodata to si units and compensate Offset
         self.angle_vel = Vector::new(
+            -self.gyro_scale.radians(gyro_data.y),
             -self.gyro_scale.radians(gyro_data.x),
-            self.gyro_scale.radians(gyro_data.y),
             self.gyro_scale.radians(gyro_data.z),
         ) + self.gyro_offset;
 
         // Calculate gravity vector in body frame
         let acc_body = Vector::new(
+            -acc_data.x as f32 / 16384.0 * 9.81 * 4.0,
             acc_data.y as f32 / 16384.0 * 9.81 * 4.0,
-            acc_data.x as f32 / 16384.0 * 9.81 * 4.0,
             acc_data.z as f32 / 16384.0 * 9.81 * 4.0,
         );
 
         // Calculate mag vector in body frame
-        let mag_body = Vector::new(mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
+        let mag_body = Vector::new(-mag_data.x as f32, mag_data.y as f32, mag_data.z as f32);
 
         // Convert gravity Vector to world frame with estimation of orientation from last cycle
         let mut acc_world = self.angle.transform_vector(&acc_body);
@@ -135,7 +135,7 @@ impl Sensors {
         // Rotate correction Vector back to Body frame
         let correction_body = self
             .angle
-            .inverse_transform_vector(&(grav_correction_world + mag_correction_world));
+            .inverse_transform_vector(&(grav_correction_world)); //:with+ mag_correction_world));
 
         // Dived by the sample rate and add to gyro measurement
         let gyro_data_with_correction = (self.angle_vel * dt) + correction_body;
