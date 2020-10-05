@@ -4,41 +4,41 @@
 
 use core::ops;
 
-use hal::gpio::{MediumSpeed, Output, PullNone, PushPull};
-use hal::gpio::{PEx, PE10, PE11, PE12, PE13, PE14, PE15, PE8, PE9};
+use hal::gpio::gpioe::{PEx, PE10, PE11, PE12, PE13, PE14, PE15, PE8, PE9};
+use hal::gpio::{Output, PushPull};
 use hal::prelude::*;
 
 ///  North LED
-pub type LD3 = PE9<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedN = PE9<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD3 = PE9<Output<PushPull>>;
+pub type LedN = PE9<Output<PushPull>>;
 
 /// Northeast LED
-pub type LD5 = PE10<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedNE = PE10<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD5 = PE10<Output<PushPull>>;
+pub type LedNE = PE10<Output<PushPull>>;
 
 /// East LED
-pub type LD7 = PE11<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedE = PE11<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD7 = PE11<Output<PushPull>>;
+pub type LedE = PE11<Output<PushPull>>;
 
 /// Southeast LED
-pub type LD9 = PE12<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedSE = PE12<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD9 = PE12<Output<PushPull>>;
+pub type LedSE = PE12<Output<PushPull>>;
 
 /// South LED
-pub type LD10 = PE13<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedS = PE13<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD10 = PE13<Output<PushPull>>;
+pub type LedS = PE13<Output<PushPull>>;
 
 /// Southwest LED
-pub type LD8 = PE14<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedSW = PE14<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD8 = PE14<Output<PushPull>>;
+pub type LedSW = PE14<Output<PushPull>>;
 
 /// West LED
-pub type LD6 = PE15<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedW = PE15<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD6 = PE15<Output<PushPull>>;
+pub type LedW = PE15<Output<PushPull>>;
 
 /// Northwest LED
-pub type LD4 = PE8<PullNone, Output<PushPull, MediumSpeed>>;
-pub type LedNW = PE8<PullNone, Output<PushPull, MediumSpeed>>;
+pub type LD4 = PE8<Output<PushPull>>;
+pub type LedNW = PE8<Output<PushPull>>;
 
 /// Cardinal directions. Each one matches one of the user LEDs.
 pub enum Direction {
@@ -137,7 +137,7 @@ impl ops::IndexMut<Direction> for Leds {
 /// One of the on-board user LEDs
 pub struct Led {
     state: bool,
-    pex: PEx<PullNone, Output<PushPull, MediumSpeed>>,
+    pex: PEx<Output<PushPull>>,
 }
 
 macro_rules! ctor {

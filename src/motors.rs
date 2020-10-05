@@ -1,21 +1,14 @@
 use hal::prelude::*;
 
-use hal::gpio::{HighSpeed, PullNone, PushPull, AF2};
-
-type PwmPinVL = hal::gpio::PC6<PullNone, hal::gpio::AltFn<AF2, PushPull, HighSpeed>>;
-type PwmPinVR = hal::gpio::PC7<PullNone, hal::gpio::AltFn<AF2, PushPull, HighSpeed>>;
-type PwmPinHL = hal::gpio::PC8<PullNone, hal::gpio::AltFn<AF2, PushPull, HighSpeed>>;
-type PwmPinHR = hal::gpio::PC9<PullNone, hal::gpio::AltFn<AF2, PushPull, HighSpeed>>;
-type PwmTimer = hal::timer::tim3::Timer<hal::timer::PwmTaken>;
-type PwmVL =
-    hal::pwm::PwmBinding<PwmPinVL, hal::timer::tim3::Channel<hal::timer::CH1, hal::timer::Pwm1>>;
-type PwmVR =
-    hal::pwm::PwmBinding<PwmPinVR, hal::timer::tim3::Channel<hal::timer::CH2, hal::timer::Pwm1>>;
-type PwmHL =
-    hal::pwm::PwmBinding<PwmPinHL, hal::timer::tim3::Channel<hal::timer::CH3, hal::timer::Pwm1>>;
-type PwmHR =
-    hal::pwm::PwmBinding<PwmPinHR, hal::timer::tim3::Channel<hal::timer::CH4, hal::timer::Pwm1>>;
-type Timer = hal::device::TIM3;
+type PwmPinVL = hal::gpio::gpioc::PC6<hal::gpio::AF2>;
+type PwmPinVR = hal::gpio::gpioc::PC7<hal::gpio::AF2>;
+type PwmPinHL = hal::gpio::gpioc::PC8<hal::gpio::AF2>;
+type PwmPinHR = hal::gpio::gpioc::PC9<hal::gpio::AF2>;
+type PwmVL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH1, hal::pwm::WithPins>;
+type PwmVR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH2, hal::pwm::WithPins>;
+type PwmHL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH3, hal::pwm::WithPins>;
+type PwmHR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH4, hal::pwm::WithPins>;
+type Timer = hal::stm32::TIM3;
 
 pub struct Motors {
     armed: bool,
@@ -23,9 +16,8 @@ pub struct Motors {
     pwm_vr: PwmVR,
     pwm_hl: PwmHL,
     pwm_hr: PwmHR,
-    duty_stop: u32,
-    duty_full: u32,
-    timer: PwmTimer,
+    duty_stop: u16,
+    duty_full: u16,
 }
 
 impl Motors {
@@ -41,42 +33,33 @@ impl Motors {
         // Arm/Stop HIGH < 1060us
         // Full Power 1860us
 
-        // Setup the timer
-        let mut timer = alt_stm32f30x_hal::timer::tim3::Timer::new(timer, 100.hz(), clocks);
-
-        // Enable Interrupt
-        timer.listen(hal::timer::Event::TimeOut);
-
-        let (channels, mut timer) = timer.use_pwm();
+        let (ch_vl, ch_vr, ch_hl, ch_hr) = hal::pwm::tim3(timer, 20_000, 50.hz(), &clocks);
 
         // Config PWM Pins
-        let mut vl = vl.to_pwm(channels.0, HighSpeed);
-        let mut vr = vr.to_pwm(channels.1, HighSpeed);
-        let mut hl = hl.to_pwm(channels.2, HighSpeed);
-        let mut hr = hr.to_pwm(channels.3, HighSpeed);
+        let mut ch_vl = ch_vl.output_to_pc6(vl);
+        let mut ch_vr = ch_vr.output_to_pc7(vr);
+        let mut ch_hl = ch_hl.output_to_pc8(hl);
+        let mut ch_hr = ch_hr.output_to_pc9(hr);
 
         // Calculate duty
-        let duty_max = vl.get_max_duty() as f32;
+        let duty_max = ch_vl.get_max_duty() as f32;
         let duty_stop = duty_max / 10_000.0 * 1060.0;
         let duty_full = duty_max / 10_000.0 * 1860.0;
 
         // Enable PWM
-        vl.enable();
-        vr.enable();
-        hl.enable();
-        hr.enable();
-
-        timer.enable();
+        ch_vl.enable();
+        ch_vr.enable();
+        ch_hl.enable();
+        ch_hr.enable();
 
         let mut motors = Self {
             armed: false,
-            pwm_vl: vl,
-            pwm_vr: vr,
-            pwm_hl: hl,
-            pwm_hr: hr,
-            duty_stop: duty_stop as u32,
-            duty_full: duty_full as u32,
-            timer,
+            pwm_vl: ch_vl,
+            pwm_vr: ch_vr,
+            pwm_hl: ch_hl,
+            pwm_hr: ch_hr,
+            duty_stop: duty_stop as u16,
+            duty_full: duty_full as u16,
         };
 
         // Disable the Motors
@@ -120,14 +103,14 @@ impl Motors {
     }
 
     /// Calculate duty from set speed
-    fn speed_to_duty(&self, speed: f32) -> u32 {
+    fn speed_to_duty(&self, speed: f32) -> u16 {
         if speed >= 100.0 {
             self.duty_full
         } else if speed <= 0.0 {
             self.duty_stop
         } else {
             let var_duty = (self.duty_full - self.duty_stop) as f32 * speed / 100.0;
-            self.duty_stop + var_duty as u32
+            self.duty_stop + var_duty as u16
         }
     }
 
@@ -138,6 +121,6 @@ impl Motors {
 
     /// Reset ISR Flag (UIF)
     pub fn reset_isr_flag(&mut self) {
-        self.timer.reset_uif();
+        unimplemented!()
     }
 }

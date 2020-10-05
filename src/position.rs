@@ -1,21 +1,18 @@
-use l3gd20;
-use lsm303dlhc;
-
-use hal::gpio::{HighSpeed, PullNone, PushPull, AF4, AF5};
+use hal::gpio::PushPull;
 
 use rtt_target::rprintln;
 
 /// I2C Configuration
-type I2cSclPin = hal::gpio::PB6<PullNone, hal::gpio::AltFn<AF4, PushPull, HighSpeed>>;
-type I2cSdaPin = hal::gpio::PB7<PullNone, hal::gpio::AltFn<AF4, PushPull, HighSpeed>>;
-type I2c = hal::device::I2C1;
+type I2cSclPin = hal::gpio::gpiob::PB6<hal::gpio::AF4>;
+type I2cSdaPin = hal::gpio::gpiob::PB7<hal::gpio::AF4>;
+type I2c = hal::stm32::I2C1;
 
 /// SPI Configuration
-type SpiSckPin = hal::gpio::PA5<PullNone, hal::gpio::AltFn<AF5, PushPull, HighSpeed>>;
-type SpiMisoPin = hal::gpio::PA6<PullNone, hal::gpio::AltFn<AF5, PushPull, HighSpeed>>;
-type SpiMosiPin = hal::gpio::PA7<PullNone, hal::gpio::AltFn<AF5, PushPull, HighSpeed>>;
-type SpiNssPin = hal::gpio::PE3<PullNone, hal::gpio::Output<PushPull, HighSpeed>>;
-type Spi = hal::device::SPI1;
+type SpiSckPin = hal::gpio::gpioa::PA5<hal::gpio::AF5>;
+type SpiMisoPin = hal::gpio::gpioa::PA6<hal::gpio::AF5>;
+type SpiMosiPin = hal::gpio::gpioa::PA7<hal::gpio::AF5>;
+type SpiNssPin = hal::gpio::gpioe::PE3<hal::gpio::Output<PushPull>>;
+type Spi = hal::stm32::SPI1;
 
 /// On board L3GD20 connected to the SPI1 bus via the pins PA5, PA6, PA7 and PE3
 pub type L3gd20 =
@@ -44,7 +41,7 @@ impl Sensors {
             gyro_offset: Vector::zeros(),
             gyro_scale,
             angle_vel: Vector::zeros(),
-            angle: nalgebra::UnitQuaternion::<f32>::identity(),
+            angle: nalgebra::geometry::UnitQuaternion::identity(),
         };
 
         sensors.init_sensors();

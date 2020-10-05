@@ -7,17 +7,13 @@
 extern crate panic_semihosting;
 
 // Used traits from the HAL crate
-extern crate alt_stm32f30x_hal as hal;
+extern crate stm32f3xx_hal as hal;
+use hal::nb::block;
 use hal::prelude::*;
 
-#[macro_use(block)]
-extern crate nb;
-
 // Message Passing between Idle, Interrupt and Periodic
-use heapless::{
-    consts::*,
-    spsc::{Consumer, Producer, Queue},
-};
+use heapless::consts::{U32, U4, U64};
+use heapless::spsc::{Consumer, Producer, Queue};
 
 use rtt_target::rprintln;
 mod fc;
@@ -32,7 +28,7 @@ use rtic::app;
 
 // Program Constants
 
-#[app(device = hal::device, peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
+#[app(device = hal::stm32 ,peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         // Que for passing data from Serial Interrupt to Idle Task
@@ -92,62 +88,53 @@ const APP: () = {
 
         rprintln!("Config of on bord Leds");
         // Setup the on board LEDs
-        let gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
-        let led_n = gpioe.pe9.output().output_speed(hal::gpio::MediumSpeed);
-        let led_ne = gpioe.pe10.output().output_speed(hal::gpio::MediumSpeed);
-        let led_e = gpioe.pe11.output().output_speed(hal::gpio::MediumSpeed);
+        let mut gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
+        let led_n = gpioe
+            .pe9
+            .into_push_pull_output(&mut gpioe.moder, &mut gpioe.otyper);
+        let led_ne = gpioe
+            .pe10
+            .into_push_pull_output(&mut gpioe.moder, &mut gpioe.otyper);
+        let led_e = gpioe
+            .pe11
+            .into_push_pull_output(&mut gpioe.moder, &mut gpioe.otyper);
 
         rprintln!("Setup I2C Bus for acceleration sensor");
         // Setup the I2C Bus for the Magneto and Accelero Meter
-        let gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
-        let scl = gpiob.pb6.alternating(hal::gpio::AF4);
-        let sda = gpiob.pb7.alternating(hal::gpio::AF4);
-        let i2c = cx.device.I2C1.i2c((scl, sda), 400.khz(), clocks);
+        let mut gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
+        let scl = gpiob.pb6.into_af4(&mut gpiob.moder, &mut gpiob.afrl);
+        let sda = gpiob.pb7.into_af4(&mut gpiob.moder, &mut gpiob.afrl);
+        let i2c = hal::i2c::I2c::i2c1(cx.device.I2C1, (scl, sda), 400.khz(), clocks, &mut rcc.apb1);
 
         let acc_sensor = lsm303dlhc::Lsm303dlhc::new(i2c).unwrap();
 
         rprintln!("Setup SPI Bus for gyro sensor");
         // Setup the Spi bus forthe Gyro
-        let gpioa = cx.device.GPIOA.split(&mut rcc.ahb);
-        let sck = gpioa
-            .pa5
-            .alternating(hal::gpio::AF5)
-            .output_speed(hal::gpio::HighSpeed);
-        let miso = gpioa
-            .pa6
-            .alternating(hal::gpio::AF5)
-            .output_speed(hal::gpio::HighSpeed);
-        let mosi = gpioa
-            .pa7
-            .alternating(hal::gpio::AF5)
-            .output_speed(hal::gpio::HighSpeed);
-        let nss = gpioe.pe3.output().output_speed(hal::gpio::HighSpeed);
-        let spi = cx
-            .device
-            .SPI1
-            .spi((sck, miso, mosi), l3gd20::MODE, 1.mhz(), clocks);
+        let mut gpioa = cx.device.GPIOA.split(&mut rcc.ahb);
+        let sck = gpioa.pa5.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
+        let miso = gpioa.pa6.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
+        let mosi = gpioa.pa7.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
+        let nss = gpioe
+            .pe3
+            .into_push_pull_output(&mut gpioe.moder, &mut gpioe.otyper);
+        let spi = hal::spi::Spi::spi1(
+            cx.device.SPI1,
+            (sck, miso, mosi),
+            l3gd20::MODE,
+            1.mhz(),
+            clocks,
+            &mut rcc.apb2,
+        );
 
         let gyro_sensor = l3gd20::L3gd20::new(spi, nss).unwrap();
 
         rprintln!("Configuration of PWM Output pins");
         // Create Pins for PWM Output to control the ESC
-        let gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
-        let pwm_pin_motor_vl = gpioc
-            .pc6
-            .alternating(hal::gpio::AF2)
-            .output_speed(hal::gpio::HighSpeed);
-        let pwm_pin_motor_vr = gpioc
-            .pc7
-            .alternating(hal::gpio::AF2)
-            .output_speed(hal::gpio::HighSpeed);
-        let pwm_pin_motor_hl = gpioc
-            .pc8
-            .alternating(hal::gpio::AF2)
-            .output_speed(hal::gpio::HighSpeed);
-        let pwm_pin_motor_hr = gpioc
-            .pc9
-            .alternating(hal::gpio::AF2)
-            .output_speed(hal::gpio::HighSpeed);
+        let mut gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
+        let pwm_pin_motor_vl = gpioc.pc6.into_af2(&mut gpioc.moder, &mut gpioc.afrl);
+        let pwm_pin_motor_vr = gpioc.pc7.into_af2(&mut gpioc.moder, &mut gpioc.afrl);
+        let pwm_pin_motor_hl = gpioc.pc8.into_af2(&mut gpioc.moder, &mut gpioc.afrh);
+        let pwm_pin_motor_hr = gpioc.pc9.into_af2(&mut gpioc.moder, &mut gpioc.afrh);
 
         rprintln!("Setup Communication Channel for Serial data to idle task");
         //Create que for serial read
@@ -160,19 +147,16 @@ const APP: () = {
 
         rprintln!("Configuration of serial interface");
         // Create USART Port for communication to remote station
-        let gpiod = cx.device.GPIOD.split(&mut rcc.ahb);
-        let tx_pin = gpiod
-            .pd5
-            .alternating(hal::gpio::AF7)
-            .output_speed(hal::gpio::HighSpeed);
-        let rx_pin = gpiod
-            .pd6
-            .alternating(hal::gpio::AF7)
-            .output_speed(hal::gpio::HighSpeed);
-        let serial = cx
-            .device
-            .USART2
-            .serial((tx_pin, rx_pin), hal::time::Bps(38400), clocks);
+        let mut gpiod = cx.device.GPIOD.split(&mut rcc.ahb);
+        let tx_pin = gpiod.pd5.into_af7(&mut gpiod.moder, &mut gpiod.afrl);
+        let rx_pin = gpiod.pd6.into_af7(&mut gpiod.moder, &mut gpiod.afrl);
+        let serial = hal::serial::Serial::usart2(
+            cx.device.USART2,
+            (tx_pin, rx_pin),
+            hal::time::Bps(38400),
+            clocks,
+            &mut rcc.apb1,
+        );
         let (tx, rx) = serial::create_tx_rx(serial);
 
         //Assign late resources
@@ -457,16 +441,15 @@ const APP: () = {
                 // Send Data to main task
                 cx.resources.PROD_SERIAL_READ.enqueue(b).ok(); // Do not care if full
             }
-            Err(nb::Error::Other(e)) => {
+            Err(hal::nb::Error::Other(e)) => {
                 if let hal::serial::Error::Overrun = e {
                     rprintln!("Serial Overrun Error");
-                    cx.resources.SERIAL_RX.clear_overrun_error();
                 } else {
                     // Ignore other Errors
                     rprintln!("Other Serial Error");
                 }
             }
-            Err(nb::Error::WouldBlock) => {} // Ignore errors
+            Err(hal::nb::Error::WouldBlock) => {} // Ignore errors
         }
     }
 
