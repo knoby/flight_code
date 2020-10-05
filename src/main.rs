@@ -28,7 +28,7 @@ use rtic::app;
 
 // Program Constants
 
-#[app(device = hal::stm32 ,peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
+#[app(device = hal::stm32 ,peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
         // Que for passing data from Serial Interrupt to Idle Task
@@ -59,7 +59,7 @@ const APP: () = {
         LED_E: led::LedE,
     }
 
-    #[init()]
+    #[init(spawn=[periodic_task])]
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U32>> = None;
@@ -158,6 +158,9 @@ const APP: () = {
             &mut rcc.apb1,
         );
         let (tx, rx) = serial::create_tx_rx(serial);
+
+        // When finished start the periodic tast
+        cx.spawn.periodic_task().unwrap();
 
         //Assign late resources
         init::LateResources {
@@ -276,7 +279,7 @@ const APP: () = {
     }
 
     /// Periodic task for real time critical things
-    #[task(binds = TIM3, priority = 5 , resources = [ SENSORS, MOTORS, CONS_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
+    #[task(schedule=[periodic_task], priority = 5 , resources = [ SENSORS, MOTORS, CONS_IDLE_TO_MOTION, ORIENTATION, MOTOR_STATE])]
     #[allow(deprecated)] // Replacementfunction is not implemented in nalgebra::RealField::abs ...
     fn periodic_task(cx: periodic_task::Context) {
         // Local Vars for this task
@@ -429,8 +432,8 @@ const APP: () = {
         // Save Temp Values to Resoruces
         *cx.resources.ORIENTATION = [angle_pos.0, angle_pos.1, angle_pos.2];
 
-        // Reset the ISR Flag
-        MOTORS.reset_isr_flag();
+        // Spawn next run
+        cx.schedule.periodic_task(cx.scheduled).unwrap();
     }
 
     /// Interrupt for reciving bytes from serial and sending to idle task

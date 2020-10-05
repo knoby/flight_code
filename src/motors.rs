@@ -116,11 +116,6 @@ impl Motors {
 
     /// Returns the Period of the underlying timer in seconds
     pub fn period(&self) -> f32 {
-        0.01
-    }
-
-    /// Reset ISR Flag (UIF)
-    pub fn reset_isr_flag(&mut self) {
-        unimplemented!()
+        0.02
     }
 }
