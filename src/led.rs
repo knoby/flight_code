@@ -65,33 +65,6 @@ pub struct Leds {
     leds: [Led; 8],
 }
 
-impl Leds {
-    /// Initializes all the user LEDs and return as array
-    pub fn new(
-        n: LedN,
-        ne: LedNE,
-        e: LedE,
-        se: LedSE,
-        s: LedS,
-        sw: LedSW,
-        w: LedW,
-        nw: LedNW,
-    ) -> Self {
-        Leds {
-            leds: [
-                n.into(),
-                ne.into(),
-                e.into(),
-                se.into(),
-                s.into(),
-                sw.into(),
-                w.into(),
-                nw.into(),
-            ],
-        }
-    }
-}
-
 impl ops::Deref for Leds {
     type Target = [Led];
 

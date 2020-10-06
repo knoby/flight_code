@@ -132,7 +132,7 @@ impl Sensors {
         // Rotate correction Vector back to Body frame
         let correction_body = self
             .angle
-            .inverse_transform_vector(&(grav_correction_world)); //:with+ mag_correction_world));
+            .inverse_transform_vector(&(grav_correction_world + mag_correction_world));
 
         // Dived by the sample rate and add to gyro measurement
         let gyro_data_with_correction = (self.angle_vel * dt) + correction_body;

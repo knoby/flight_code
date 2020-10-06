@@ -79,7 +79,7 @@ impl FlighController {
         // Angle Velocity Control
         let roll_set = self.roll_vel_ctrl.calc_next_output(angle_vel.0, dt);
         let pitch_set = self.pitch_vel_ctrl.calc_next_output(angle_vel.1, dt);
-        let yaw_set = self.yaw_vel_ctrl.calc_next_output(0.0, dt);
+        let _yaw_set = self.yaw_vel_ctrl.calc_next_output(0.0, dt);
 
         // Calculate the setpoint for the different Motors
         let vl = roll_set + pitch_set;

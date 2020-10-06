@@ -307,14 +307,14 @@ const APP: () = {
                     // Limit the set value
                     match ctrl_mode {
                         copter_defs::CtrlMode::DirectCtrl(mut speed) => {
-                            for i in 0..4 {
-                                speed[i] = speed[i].min(100.0).max(0.0);
+                            for s in speed.iter_mut() {
+                                *s = s.min(100.0).max(100.0);
                             }
                             *CTRL_MODE = copter_defs::CtrlMode::DirectCtrl(speed);
                         }
                         copter_defs::CtrlMode::AngleCtrl(mut angle) => {
-                            for i in 0..3 {
-                                angle[i] = angle[i].min(10.0).max(-10.0);
+                            for a in angle.iter_mut() {
+                                *a = a.min(10.0).max(-10.0);
                             }
                             *CTRL_MODE = copter_defs::CtrlMode::AngleCtrl(angle);
                         }
