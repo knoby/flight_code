@@ -197,8 +197,8 @@ const APP: () = {
     fn idle(mut cx: idle::Context) -> ! {
         let mut buffer = heapless::Vec::<u8, U64>::new();
         loop {
-            // Toggle LED for Idle Mode is running
             if let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
+                // Toggle LED to show that a byte is recived
                 cx.resources.LED_NE.toggle().unwrap();
                 // Read from que
                 if serial::check_frame_end(val) {

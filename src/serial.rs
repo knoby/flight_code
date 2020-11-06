@@ -1,3 +1,5 @@
+use rc_framing::framing;
+
 type SerialTxPin = hal::gpio::gpiod::PD5<hal::gpio::AF7>;
 
 type SerialRxPin = hal::gpio::gpiod::PD6<hal::gpio::AF7>;
@@ -18,8 +20,6 @@ pub fn create_tx_rx(mut serial: Serial) -> (SerialTx, SerialRx) {
 
     (tx, rx)
 }
-
-use rc_framing::framing;
 
 /// Returns true if the recived byte is the end byte of a frame
 pub fn check_frame_end(last_byte: u8) -> bool {
