@@ -7,12 +7,9 @@ version = "0.1.0"
 
 [dependencies]
 cortex-m = "0.6.3"
-cortex-m-semihosting = "0.3.5"
 heapless = "0.5.6"
 l3gd20 = "0.3.0"
 lsm303dlhc = "0.2.0"
-panic-halt = "0.2.0"
-panic-semihosting = "0.5.3"
 
 [dependencies.num-traits]
 default-features = false
@@ -37,11 +34,60 @@ version = "0.5.0"
 [dependencies.cortex-m-rtic]
 version = "0.5.5"
 
-[dependencies.rtt-target]
-features = ["cortex-m"]
-version = "0.2.2"
+[dependencies.defmt]
+git = "https://github.com/knurling-rs/defmt"
+rev = "a6dc090"
+
+[dependencies.defmt-rtt]
+git = "https://github.com/knurling-rs/defmt"
+rev = "a6dc090"
+
+[dependencies.panic-probe]
+branch = "main"
+git = "https://github.com/knurling-rs/probe-run"
+
+[features]
+# set logging levels here
+default = [
+  "defmt-default",
+]
+
+# do NOT modify these features
+defmt-debug = []
+defmt-default = []
+defmt-error = []
+defmt-info = []
+defmt-trace = []
+defmt-warn = []
+
+[profile.dev]
+codegen-units = 1 
+debug = 2 
+debug-assertions = true # <-
+incremental = false 
+opt-level = 3 # <-
+overflow-checks = true # <-
 
 [profile.release]
-codegen-units = 1 # better optimizations
-debug = true # symbols are nice and they don't increase the size on Flash
-lto = true # better optimizations
+codegen-units = 1 
+debug = 2 
+debug-assertions = false # <-
+incremental = false 
+lto = 'fat' 
+opt-level = 3 # <-
+overflow-checks = false # <-
+
+# do not optimize proc-macro crates = faster builds from scratch
+[profile.dev.build-override]
+codegen-units = 8
+debug = false
+debug-assertions = false
+opt-level = 0
+overflow-checks = false
+
+[profile.release.build-override]
+codegen-units = 8
+debug = false
+debug-assertions = false
+opt-level = 0
+overflow-checks = false

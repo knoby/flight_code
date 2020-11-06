@@ -1,6 +1,6 @@
 use hal::gpio::PushPull;
 
-use rtt_target::rprintln;
+use defmt::debug;
 
 /// I2C Configuration
 type I2cSclPin = hal::gpio::gpiob::PB6<hal::gpio::AF4>;
@@ -49,7 +49,7 @@ impl Sensors {
     }
 
     pub fn init_sensors(&mut self) {
-        rprintln!("Configuration of Gyro Sensor");
+        debug!("Configuration of Gyro Sensor");
         // Set Output data rate. Interval is 10 ms --> min ODR is 190 Hz
         self.gyro.set_odr(l3gd20::Odr::Hz190).unwrap();
         // Use a high bandwith
@@ -58,7 +58,7 @@ impl Sensors {
         // problemthis can be decreased to Dps500
         self.gyro.set_scale(self.gyro_scale).unwrap();
 
-        rprintln!("Configuration of Acceleration Sensor");
+        debug!("Configuration of Acceleration Sensor");
         // Set Output data rate for acc and mag. Controll loop runs at 100Hz --> 200 Hz is minimum
         // for acc reading
         self.acc.accel_odr(lsm303dlhc::AccelOdr::Hz200).unwrap();
@@ -72,7 +72,7 @@ impl Sensors {
 
         // Calculate the Offset of the gyre reading by reading 100 Values and divinding the sum by
         // 100
-        rprintln!("Collect Data for Gyro Callibration");
+        debug!("Collect Data for Gyro Callibration");
         let mut gyro_offset = Vector::zeros();
         for _ in 0..100 {
             let reading = self.gyro.gyro().unwrap();

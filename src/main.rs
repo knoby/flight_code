@@ -2,20 +2,24 @@
 #![no_main]
 #![no_std]
 
+// Global Logger
+use defmt_rtt as _;
 // Define Panic behaivior
-//extern crate panic_halt;
-extern crate panic_semihosting;
+use panic_probe as _;
 
 // Used traits from the HAL crate
 extern crate stm32f3xx_hal as hal;
 use hal::nb::block;
 use hal::prelude::*;
 
+// Logger macros
+use defmt::debug;
+
 // Message Passing between Idle, Interrupt and Periodic
 use heapless::consts::{U32, U4, U64};
 use heapless::spsc::{Consumer, Producer, Queue};
 
-use rtt_target::rprintln;
+// Local modules
 mod fc;
 mod ipc;
 mod led;
@@ -65,10 +69,8 @@ const APP: () = {
         static mut Q_SERIAL_READ: Option<Queue<u8, U32>> = None;
         static mut Q_IDLE_TO_MOTION: Option<Queue<ipc::IPC, U4>> = None;
 
-        // Init RTT Communictaion
-        rtt_target::rtt_init_print!();
-        rprintln!("Rustocupter Wakeup after reset.");
-        rprintln!("Start Init...");
+        debug!("Rustocupter Wakeup after reset.");
+        debug!("Start Init...");
 
         // Initialize (enable) the monotonic timer (CYCCNT)
         cx.core.DCB.enable_trace();
@@ -78,7 +80,7 @@ const APP: () = {
         let mut flash = cx.device.FLASH.constrain();
         let mut rcc = cx.device.RCC.constrain();
 
-        rprintln!("Setting Up Clocks");
+        debug!("Setting Up Clocks");
         let clocks = rcc
             .cfgr
             .sysclk(64.mhz())
@@ -86,7 +88,7 @@ const APP: () = {
             .pclk2(64.mhz())
             .freeze(&mut flash.acr);
 
-        rprintln!("Config of on bord Leds");
+        debug!("Config of on bord Leds");
         // Setup the on board LEDs
         let mut gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
         let led_n = gpioe
@@ -99,7 +101,7 @@ const APP: () = {
             .pe11
             .into_push_pull_output(&mut gpioe.moder, &mut gpioe.otyper);
 
-        rprintln!("Setup I2C Bus for acceleration sensor");
+        debug!("Setup I2C Bus for acceleration sensor");
         // Setup the I2C Bus for the Magneto and Accelero Meter
         let mut gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
         let scl = gpiob.pb6.into_af4(&mut gpiob.moder, &mut gpiob.afrl);
@@ -108,7 +110,7 @@ const APP: () = {
 
         let acc_sensor = lsm303dlhc::Lsm303dlhc::new(i2c).unwrap();
 
-        rprintln!("Setup SPI Bus for gyro sensor");
+        debug!("Setup SPI Bus for gyro sensor");
         // Setup the Spi bus forthe Gyro
         let mut gpioa = cx.device.GPIOA.split(&mut rcc.ahb);
         let sck = gpioa.pa5.into_af5(&mut gpioa.moder, &mut gpioa.afrl);
@@ -128,7 +130,7 @@ const APP: () = {
 
         let gyro_sensor = l3gd20::L3gd20::new(spi, nss).unwrap();
 
-        rprintln!("Configuration of PWM Output pins");
+        debug!("Configuration of PWM Output pins");
         // Create Pins for PWM Output to control the ESC
         let mut gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
         let pwm_pin_motor_vl = gpioc.pc6.into_af2(&mut gpioc.moder, &mut gpioc.afrl);
@@ -136,16 +138,16 @@ const APP: () = {
         let pwm_pin_motor_hl = gpioc.pc8.into_af2(&mut gpioc.moder, &mut gpioc.afrh);
         let pwm_pin_motor_hr = gpioc.pc9.into_af2(&mut gpioc.moder, &mut gpioc.afrh);
 
-        rprintln!("Setup Communication Channel for Serial data to idle task");
+        debug!("Setup Communication Channel for Serial data to idle task");
         //Create que for serial read
         *Q_SERIAL_READ = Some(Queue::new());
         let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
 
-        rprintln!("Setup Commuincation Channel for Idle to Motion Task");
+        debug!("Setup Commuincation Channel for Idle to Motion Task");
         *Q_IDLE_TO_MOTION = Some(Queue::new());
         let (pitm, citm) = Q_IDLE_TO_MOTION.as_mut().unwrap().split();
 
-        rprintln!("Configuration of serial interface");
+        debug!("Configuration of serial interface");
         // Create USART Port for communication to remote station
         let mut gpiod = cx.device.GPIOD.split(&mut rcc.ahb);
         let tx_pin = gpiod.pd5.into_af7(&mut gpiod.moder, &mut gpiod.afrl);
@@ -371,7 +373,7 @@ const APP: () = {
             }
             // Change Ctrl Mode
             fc::ControlState::ChooseCtrlMode => {
-                rprintln!("Changed Ctrl Mode: {:?}", *CTRL_MODE);
+                debug!("Changed Ctrl Mode: {:?}", *CTRL_MODE);
                 match *CTRL_MODE {
                     copter_defs::CtrlMode::DirectCtrl(_) => {
                         *STATE = fc::ControlState::DirectControl;
@@ -446,10 +448,10 @@ const APP: () = {
             }
             Err(hal::nb::Error::Other(e)) => {
                 if let hal::serial::Error::Overrun = e {
-                    rprintln!("Serial Overrun Error");
+                    debug!("Serial Overrun Error");
                 } else {
                     // Ignore other Errors
-                    rprintln!("Other Serial Error");
+                    debug!("Other Serial Error");
                 }
             }
             Err(hal::nb::Error::WouldBlock) => {} // Ignore errors
