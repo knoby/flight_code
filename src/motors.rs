@@ -1,21 +1,21 @@
 use hal::prelude::*;
 
-type PwmPinVL = hal::gpio::gpioc::PC6<hal::gpio::AF2>;
-type PwmPinVR = hal::gpio::gpioc::PC7<hal::gpio::AF2>;
-type PwmPinHL = hal::gpio::gpioc::PC8<hal::gpio::AF2>;
-type PwmPinHR = hal::gpio::gpioc::PC9<hal::gpio::AF2>;
-type PwmVL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH1, hal::pwm::WithPins>;
-type PwmVR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH2, hal::pwm::WithPins>;
-type PwmHL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH3, hal::pwm::WithPins>;
-type PwmHR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH4, hal::pwm::WithPins>;
+type PwmPinFL = hal::gpio::gpioc::PC6<hal::gpio::AF2>;
+type PwmPinFR = hal::gpio::gpioc::PC7<hal::gpio::AF2>;
+type PwmPinRL = hal::gpio::gpioc::PC8<hal::gpio::AF2>;
+type PwmPinRR = hal::gpio::gpioc::PC9<hal::gpio::AF2>;
+type PwmFL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH1, hal::pwm::WithPins>;
+type PwmFR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH2, hal::pwm::WithPins>;
+type PwmRL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH3, hal::pwm::WithPins>;
+type PwmRR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH4, hal::pwm::WithPins>;
 type Timer = hal::stm32::TIM3;
 
 pub struct Motors {
     armed: bool,
-    pwm_vl: PwmVL,
-    pwm_vr: PwmVR,
-    pwm_hl: PwmHL,
-    pwm_hr: PwmHR,
+    pwm_fl: PwmFL,
+    pwm_fr: PwmFR,
+    pwm_rl: PwmRL,
+    pwm_rr: PwmRR,
     duty_stop: u16,
     duty_full: u16,
 }
@@ -23,41 +23,41 @@ pub struct Motors {
 impl Motors {
     /// Create New Struct controling the motors
     pub fn new(
-        vl: PwmPinVL,
-        vr: PwmPinVR,
-        hl: PwmPinHL,
-        hr: PwmPinHR,
+        fl: PwmPinFL,
+        fr: PwmPinFR,
+        rl: PwmPinRL,
+        rr: PwmPinRR,
         timer: Timer,
         clocks: hal::rcc::Clocks,
     ) -> Self {
         // Arm/Stop HIGH < 1060us
         // Full Power 1860us
 
-        let (ch_vl, ch_vr, ch_hl, ch_hr) = hal::pwm::tim3(timer, 20_000, 50.hz(), &clocks);
+        let (ch_fl, ch_fr, ch_rl, ch_rr) = hal::pwm::tim3(timer, 20_000, 50.hz(), &clocks);
 
         // Config PWM Pins
-        let mut ch_vl = ch_vl.output_to_pc6(vl);
-        let mut ch_vr = ch_vr.output_to_pc7(vr);
-        let mut ch_hl = ch_hl.output_to_pc8(hl);
-        let mut ch_hr = ch_hr.output_to_pc9(hr);
+        let mut ch_fl = ch_fl.output_to_pc6(fl);
+        let mut ch_fr = ch_fr.output_to_pc7(fr);
+        let mut ch_rl = ch_rl.output_to_pc8(rl);
+        let mut ch_rr = ch_rr.output_to_pc9(rr);
 
         // Calculate duty
-        let duty_max = ch_vl.get_max_duty() as f32;
+        let duty_max = ch_fl.get_max_duty() as f32;
         let duty_stop = duty_max / 10_000.0 * 1060.0;
         let duty_full = duty_max / 10_000.0 * 1860.0;
 
         // Enable PWM
-        ch_vl.enable();
-        ch_vr.enable();
-        ch_hl.enable();
-        ch_hr.enable();
+        ch_fl.enable();
+        ch_fr.enable();
+        ch_rl.enable();
+        ch_rr.enable();
 
         let mut motors = Self {
             armed: false,
-            pwm_vl: ch_vl,
-            pwm_vr: ch_vr,
-            pwm_hl: ch_hl,
-            pwm_hr: ch_hr,
+            pwm_fl: ch_fl,
+            pwm_fr: ch_fr,
+            pwm_rl: ch_rl,
+            pwm_rr: ch_rr,
             duty_stop: duty_stop as u16,
             duty_full: duty_full as u16,
         };
@@ -72,12 +72,12 @@ impl Motors {
     /// Set the rotaion speed of all three Motors.
     /// Allowed values are from 0.0 (Stop), 100.0 (Full Speed)
     /// Values out of this range will be limited to the range
-    pub fn set_speed(&mut self, vl: f32, vr: f32, hl: f32, hr: f32) {
+    pub fn set_speed(&mut self, fl: f32, fr: f32, rl: f32, rr: f32) {
         if self.armed {
-            self.pwm_vl.set_duty(self.speed_to_duty(vl));
-            self.pwm_vr.set_duty(self.speed_to_duty(vr));
-            self.pwm_hl.set_duty(self.speed_to_duty(hl));
-            self.pwm_hr.set_duty(self.speed_to_duty(hr));
+            self.pwm_fl.set_duty(self.speed_to_duty(fl));
+            self.pwm_fr.set_duty(self.speed_to_duty(fr));
+            self.pwm_rl.set_duty(self.speed_to_duty(rl));
+            self.pwm_rr.set_duty(self.speed_to_duty(rr));
         };
     }
 
@@ -91,10 +91,10 @@ impl Motors {
     /// Disable the Motor Stages with setting the duty to zero
     pub fn disable(&mut self) {
         self.armed = false;
-        self.pwm_vl.set_duty(0);
-        self.pwm_vr.set_duty(0);
-        self.pwm_hl.set_duty(0);
-        self.pwm_hr.set_duty(0);
+        self.pwm_fl.set_duty(0);
+        self.pwm_fr.set_duty(0);
+        self.pwm_rl.set_duty(0);
+        self.pwm_rr.set_duty(0);
     }
 
     pub fn enable(&mut self) {
@@ -112,10 +112,5 @@ impl Motors {
             let var_duty = (self.duty_full - self.duty_stop) as f32 * speed / 100.0;
             self.duty_stop + var_duty as u16
         }
-    }
-
-    /// Returns the Period of the underlying timer in seconds
-    pub fn period(&self) -> f32 {
-        0.02
     }
 }

@@ -43,7 +43,6 @@ impl Sensors {
             angle_vel: Vector::zeros(),
             angle: nalgebra::geometry::UnitQuaternion::identity(),
         };
-
         sensors.init_sensors();
         sensors
     }
@@ -147,8 +146,8 @@ impl Sensors {
     }
 
     /// Get roll pitch and yaw angle vel
-    pub fn angle_vel(&self) -> (f32, f32, f32) {
-        (self.angle_vel.x, self.angle_vel.y, self.angle_vel.z)
+    pub fn angle_vel(&self) -> Vector {
+        self.angle_vel
     }
 
     /// Get Euler Angles

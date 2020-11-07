@@ -15,12 +15,8 @@ lsm303dlhc = "0.2.0"
 default-features = false
 version = "0.2"
 
-[dependencies.copter_defs]
-features = ["no_std"]
-path = "../copter_defs"
-
-[dependencies.rc_framing]
-path = "../rc_framing"
+[dependencies.copter_com]
+path = "../copter_com"
 
 [dependencies.nalgebra]
 default-features = false
@@ -59,6 +55,7 @@ defmt-error = []
 defmt-info = []
 defmt-trace = []
 defmt-warn = []
+serial_usb = []
 
 [profile.dev]
 codegen-units = 1 

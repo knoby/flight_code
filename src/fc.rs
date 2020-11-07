@@ -2,14 +2,42 @@ use num_traits::float::FloatCore;
 
 use core::f32::consts::PI;
 
+pub type Vector = nalgebra::Vector3<f32>;
+
+/// Commands for the actual flight code from the application
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+pub enum AppCommand {
+    DisableMotors,
+    EnableMotors,
+}
+
 /// States for the state machine in the high task
 #[derive(Copy, Clone, PartialEq)]
 pub enum ControlState {
+    /// Motors are disabled
     Disabled,
+    /// Arming the Motors (takes approx 500ms)
     Arming,
-    ChooseCtrlMode,
-    DirectControl,
-    AngleControl,
+    /// Running the motors with the given ctrl algorithm
+    Running,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum SetValues {
+    /// Set the speed for the motors direct
+    DirectControl([f32; 4]),
+    /// Set the Forces/Torques for moving Yaw, Pitch, Roll and Thrust direct
+    YPRTControl([f32; 4]),
+    /// Closed loop control for Angles
+    AngleCtrl([f32; 3]),
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+/// The current estimated state
+pub struct State {
+    pub euler_angle: (f32, f32, f32),
+    pub angle_vel: Vector,
+    pub position: Vector,
+    pub velocity: Vector,
 }
 
 pub struct FlighController {
@@ -71,23 +99,7 @@ impl FlighController {
         angle_pos: (f32, f32, f32),
         dt: f32,
     ) -> (f32, f32, f32, f32) {
-        // Angle Controll
-        self.roll_vel_ctrl.setpoint = self.roll_pos_ctrl.calc_next_output(angle_pos.0, dt);
-        self.pitch_vel_ctrl.setpoint = self.pitch_pos_ctrl.calc_next_output(angle_pos.1, dt);
-        self.yaw_vel_ctrl.setpoint = 0.0;
-
-        // Angle Velocity Control
-        let roll_set = self.roll_vel_ctrl.calc_next_output(angle_vel.0, dt);
-        let pitch_set = self.pitch_vel_ctrl.calc_next_output(angle_vel.1, dt);
-        let _yaw_set = self.yaw_vel_ctrl.calc_next_output(0.0, dt);
-
-        // Calculate the setpoint for the different Motors
-        let vl = roll_set + pitch_set;
-        let vr = -roll_set + pitch_set;
-        let hl = roll_set - pitch_set;
-        let hr = -roll_set - pitch_set;
-
-        (vl, vr, hl, hr)
+        (0.0, 0.0, 0.0, 0.0)
     }
 }
 
