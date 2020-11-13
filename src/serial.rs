@@ -1,3 +1,5 @@
+use hal::prelude::*;
+
 #[cfg(not(feature = "serial_usb"))]
 mod serial_bt {
     pub type SerialTxPin = hal::gpio::gpiod::PD5<hal::gpio::AF7>;
@@ -38,7 +40,9 @@ pub fn create_tx_rx(mut serial: Serial) -> (SerialTx, SerialRx) {
     (tx, rx)
 }
 
-/// Returns true if the recived byte is the end byte of a frame
-pub fn check_frame_end(last_byte: u8) -> bool {
-    last_byte == 13
+/// Writes all data from given buffer
+pub fn send_message(serial: &mut SerialTx, msg: &[u8]) {
+    for byte in msg.iter() {
+        nb::block!(serial.write(*byte)).ok();
+    }
 }

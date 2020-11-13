@@ -12,7 +12,7 @@ pub enum AppCommand {
 }
 
 /// States for the state machine in the high task
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, defmt::Format)]
 pub enum ControlState {
     /// Motors are disabled
     Disabled,

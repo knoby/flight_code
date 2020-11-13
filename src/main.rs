@@ -15,7 +15,7 @@ use hal::prelude::*;
 use defmt::debug;
 
 // Message Passing between Idle, Interrupt and Periodic
-use heapless::consts::{U128, U32};
+use heapless::consts::{U128, U32, U4};
 use heapless::spsc::{Consumer, Producer, Queue};
 
 // Local modules
@@ -30,15 +30,19 @@ use rtic::app;
 
 // Program Constants
 const CORE_FREQUENCY: u32 = 64_000_000;
-const CONTROL_LOOP_PERIOD: u32 = CORE_FREQUENCY / 10;
-const MOTOR_ARMING_TIME: u32 = CORE_FREQUENCY / 2;
+const CONTROL_LOOP_PERIOD: u32 = CORE_FREQUENCY / 100;
+const MOTOR_ARMING_TIME: u32 = CORE_FREQUENCY / 1;
 
 #[app(device = hal::stm32 ,peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
-        // Que for passing data from Serial Interrupt to Idle Task
+        // Queue for passing data from Serial Interrupt to Idle Task
         PROD_SERIAL_READ: Producer<'static, u8, U32>,
         CONS_SERIAL_READ: Consumer<'static, u8, U32>,
+
+        // Queue for passing application commands
+        PROD_APP_CMD: Producer<'static, fc::AppCommand, U4>,
+        CONS_APP_CMD: Consumer<'static, fc::AppCommand, U4>,
 
         // Communication to Base Station
         SERIAL_RX: serial::SerialRx,
@@ -68,6 +72,7 @@ const APP: () = {
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U32>> = None;
+        static mut Q_APP_COMMANDS: Option<Queue<fc::AppCommand, U4>> = None;
 
         debug!("Rustocupter Wakeup after reset.");
         debug!("Start Init...");
@@ -161,6 +166,10 @@ const APP: () = {
         *Q_SERIAL_READ = Some(Queue::new());
         let (ps, cs) = Q_SERIAL_READ.as_mut().unwrap().split();
 
+        debug!("Setup Communication Channel for Application Commands");
+        *Q_APP_COMMANDS = Some(Queue::new());
+        let (pa, ca) = Q_APP_COMMANDS.as_mut().unwrap().split();
+
         debug!("Configuration of serial interface");
         // Create USART Port for communication to remote station
         #[cfg(not(feature = "serial_usb"))]
@@ -198,6 +207,9 @@ const APP: () = {
             PROD_SERIAL_READ: ps,
             CONS_SERIAL_READ: cs,
 
+            PROD_APP_CMD: pa,
+            CONS_APP_CMD: ca,
+
             SERIAL_RX: rx,
             SERIAL_TX: tx,
 
@@ -230,33 +242,60 @@ const APP: () = {
     // ====================================================
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CONS_SERIAL_READ, LED_NE, LED_E, SERIAL_TX ])]
+    #[idle(resources = [CONS_SERIAL_READ, LED_NE, LED_E, SERIAL_TX, PROD_APP_CMD ])]
     fn idle(cx: idle::Context) -> ! {
         debug!("Entering Idle Task");
-        let mut buffer = heapless::Vec::<u8, U128>::new();
+        let mut buffer = heapless::Vec::<u8, U32>::new();
+        let serial = cx.resources.SERIAL_TX;
+        let mut length = None;
+        let mut reciving_msg = false;
         loop {
-            if let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
-                debug!("Recived Byte: {:?}", val);
-                // Toggle LED to show that a byte is recived
+            while let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
                 cx.resources.LED_NE.toggle().unwrap();
-                // Read from queue
-                if serial::check_frame_end(val) {
-                    if let Ok((_, msg)) = copter_com::Message::deserialize(&buffer) {
-                        match msg {
-                            copter_com::Message::Set(copter_com::State::Led(value)) => {
-                                if value {
-                                    cx.resources.LED_E.set_high().unwrap();
-                                } else {
-                                    cx.resources.LED_E.set_low().unwrap();
+
+                // wait for start byte
+                if (val == copter_com::START_BYTE) && !reciving_msg {
+                    reciving_msg = true;
+                    length = None;
+                    buffer.clear();
+                }
+
+                // Add byte to buffer
+                if reciving_msg {
+                    buffer.push(val).ok();
+                    let mut raw = [0; 32];
+                    for (i, byte) in buffer.iter().enumerate() {
+                        raw[i] = *byte;
+                    }
+                }
+
+                // Is the length byte?
+                if buffer.len() == 2 {
+                    if val <= 30 {
+                        length = Some(val);
+                    } else {
+                        reciving_msg = false;
+                    }
+                }
+
+                // Check end of message
+                if let Some(len) = length {
+                    if (len as u16 + 2) == (buffer.len() as u16) {
+                        let msg = copter_com::Message::parse(&buffer);
+                        debug!("{:?}", msg);
+                        if let Ok(msg) = msg {
+                            match msg {
+                                copter_com::Message::Ping(_) => {
+                                    for byte in msg.serialize().iter() {
+                                        nb::block!(serial.write(*byte)).ok();
+                                    }
                                 }
                             }
-                            _ => unimplemented!(),
-                        }
+                            cx.resources.LED_E.toggle().unwrap()
+                        };
+                        reciving_msg = false;
+                        length = None;
                     }
-                    buffer.clear(); // Reset Index
-                } else {
-                    // Try to Add to buffer. Do not care if full
-                    buffer.push(val).ok();
                 }
             }
         }
@@ -290,7 +329,7 @@ const APP: () = {
     }
 
     /// Task to calculate the setpoints depending on the chosen control strategie
-    #[task(priority = 5, resources = [MOTORS, STATE, SETPOINT, LED_S])]
+    #[task(priority = 5, resources = [MOTORS, STATE, SETPOINT, LED_S, CONS_APP_CMD])]
     fn control_algorithm(cx: control_algorithm::Context) {
         // Data for handling the current flight controler state
         static mut STATE: fc::ControlState = fc::ControlState::Disabled;
@@ -298,15 +337,15 @@ const APP: () = {
         static mut CYCLE_COUNT: u32 = 0;
 
         // Handle Commands from Main Application
-        let cmd = fc::AppCommand::DisableMotors;
-
-        match cmd {
-            fc::AppCommand::DisableMotors => {
-                *STATE = fc::ControlState::Disabled;
-            }
-            fc::AppCommand::EnableMotors => {
-                if *STATE == fc::ControlState::Disabled {
-                    *STATE = fc::ControlState::Arming;
+        while let Some(cmd) = cx.resources.CONS_APP_CMD.dequeue() {
+            match cmd {
+                fc::AppCommand::DisableMotors => {
+                    *STATE = fc::ControlState::Disabled;
+                }
+                fc::AppCommand::EnableMotors => {
+                    if *STATE == fc::ControlState::Disabled {
+                        *STATE = fc::ControlState::Arming;
+                    }
                 }
             }
         }
@@ -314,6 +353,7 @@ const APP: () = {
         // Detect state change
         let new = *STATE != *STATE_OLD;
         if new {
+            debug!("New State: {:?}", *STATE);
             *CYCLE_COUNT = 0;
         }
         *STATE_OLD = *STATE;
@@ -325,7 +365,9 @@ const APP: () = {
             }
             fc::ControlState::Arming => {
                 cx.resources.MOTORS.enable();
-                cx.resources.LED_S.set_high().unwrap();
+                if (*CYCLE_COUNT % 10) == 0 {
+                    cx.resources.LED_S.toggle().unwrap();
+                }
                 if *CYCLE_COUNT >= (MOTOR_ARMING_TIME / CONTROL_LOOP_PERIOD) {
                     *STATE = fc::ControlState::Running;
                 }
@@ -342,6 +384,8 @@ const APP: () = {
                 cx.resources.MOTORS.set_speed(10.0, 20.0, 30.0, 40.0)
             }
         }
+
+        *CYCLE_COUNT = CYCLE_COUNT.wrapping_add(1);
     }
 
     // ====================================================
@@ -351,7 +395,6 @@ const APP: () = {
     /// Interrupt for reciving bytes from serial and sending to idle task
     #[task(binds = USART2_EXTI26, priority = 8, resources = [SERIAL_RX, PROD_SERIAL_READ])]
     fn read_serial_byte_usart2(cx: read_serial_byte_usart2::Context) {
-        debug!("USART2");
         match cx.resources.SERIAL_RX.read() {
             Ok(b) => {
                 // Send Data to main task
@@ -371,7 +414,6 @@ const APP: () = {
 
     #[task(binds = USART1_EXTI25, priority = 8, resources = [SERIAL_RX, PROD_SERIAL_READ])]
     fn read_serial_byte_usart1(cx: read_serial_byte_usart1::Context) {
-        debug!("USART1");
         match cx.resources.SERIAL_RX.read() {
             Ok(b) => {
                 // Send Data to main task
