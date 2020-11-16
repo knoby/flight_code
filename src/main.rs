@@ -15,7 +15,7 @@ use hal::prelude::*;
 use defmt::debug;
 
 // Message Passing between Idle, Interrupt and Periodic
-use heapless::consts::{U128, U32, U4};
+use heapless::consts::{U32, U4};
 use heapless::spsc::{Consumer, Producer, Queue};
 
 // Local modules
@@ -31,7 +31,7 @@ use rtic::app;
 // Program Constants
 const CORE_FREQUENCY: u32 = 64_000_000;
 const CONTROL_LOOP_PERIOD: u32 = CORE_FREQUENCY / 100;
-const MOTOR_ARMING_TIME: u32 = CORE_FREQUENCY / 1;
+const MOTOR_ARMING_TIME: u32 = CORE_FREQUENCY;
 
 #[app(device = hal::stm32 ,peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
@@ -66,6 +66,10 @@ const APP: () = {
         LED_SW: led::LedSW,
         LED_W: led::LedW,
         LED_NW: led::LedNW,
+
+        // Parameter and Status
+        PARAMETER: fc::Parameter,
+        STATUS: fc::Status,
     }
 
     #[init(spawn=[state_estimation])]
@@ -172,6 +176,7 @@ const APP: () = {
 
         debug!("Configuration of serial interface");
         // Create USART Port for communication to remote station
+
         #[cfg(not(feature = "serial_usb"))]
         let serial = {
             let tx_pin = gpiod.pd5.into_af7(&mut gpiod.moder, &mut gpiod.afrl);
@@ -234,6 +239,9 @@ const APP: () = {
             LED_SW: led_sw,
             LED_W: led_w,
             LED_NW: led_nw,
+
+            PARAMETER: fc::Parameter::default(),
+            STATUS: fc::Status::default(),
         }
     }
 
@@ -242,11 +250,10 @@ const APP: () = {
     // ====================================================
 
     /// Idle Task for non critical jobs
-    #[idle(resources = [CONS_SERIAL_READ, LED_NE, LED_E, SERIAL_TX, PROD_APP_CMD ])]
-    fn idle(cx: idle::Context) -> ! {
+    #[idle(resources = [CONS_SERIAL_READ, LED_NE, LED_E, STATUS, PROD_APP_CMD], spawn = [serial_send] )]
+    fn idle(mut cx: idle::Context) -> ! {
         debug!("Entering Idle Task");
         let mut buffer = heapless::Vec::<u8, U32>::new();
-        let serial = cx.resources.SERIAL_TX;
         let mut length = None;
         let mut reciving_msg = false;
         loop {
@@ -286,10 +293,23 @@ const APP: () = {
                         if let Ok(msg) = msg {
                             match msg {
                                 copter_com::Message::Ping(_) => {
-                                    for byte in msg.serialize().iter() {
-                                        nb::block!(serial.write(*byte)).ok();
-                                    }
+                                    cx.spawn.serial_send(msg).unwrap();
+                                    let mut status = fc::Status::default();
+                                    cx.resources.STATUS.lock(|val| {
+                                        status = *val;
+                                    });
+                                    let attitude =
+                                        copter_com::Message::Attitude(copter_com::Attitude {
+                                            roll: status.roll,
+                                            pitch: status.pitch,
+                                            yaw: status.yaw,
+                                            roll_speed: status.roll_vel,
+                                            pitch_speed: status.pitch_vel,
+                                            yaw_speed: status.yaw_vel,
+                                        });
+                                    cx.spawn.serial_send(attitude).unwrap();
                                 }
+                                copter_com::Message::Attitude(_) => (),
                             }
                             cx.resources.LED_E.toggle().unwrap()
                         };
@@ -302,11 +322,22 @@ const APP: () = {
     }
 
     // ====================================================
+    // ==== Task for sending data over serial ====
+    // ====================================================
+    #[task(priority = 2, resources = [SERIAL_TX], capacity = 4)]
+    fn serial_send(cx: serial_send::Context, msg: copter_com::Message) {
+        let buffer = msg.serialize();
+        for byte in buffer.iter() {
+            nb::block!(cx.resources.SERIAL_TX.write(*byte)).unwrap();
+        }
+    }
+
+    // ====================================================
     // ==== Task for flight control ====
     // ====================================================
 
     /// Task to update the current estimation of the state
-    #[task(priority = 5, resources = [SENSORS, STATE], spawn = [control_algorithm], schedule = [state_estimation])]
+    #[task(priority = 5, resources = [SENSORS, STATE, STATUS], spawn = [control_algorithm], schedule = [state_estimation])]
     fn state_estimation(cx: state_estimation::Context) {
         // Calculate new position estimation
         cx.resources
@@ -314,8 +345,16 @@ const APP: () = {
             .update(CONTROL_LOOP_PERIOD as f32 / CORE_FREQUENCY as f32);
 
         // Construct estimated state
-        cx.resources.STATE.euler_angle = cx.resources.SENSORS.euler_angles();
-        cx.resources.STATE.angle_vel = cx.resources.SENSORS.angle_vel();
+        let euler_angle = cx.resources.SENSORS.euler_angles();
+        let angle_vel = cx.resources.SENSORS.angle_vel();
+
+        // Set Status
+        cx.resources.STATUS.roll = euler_angle.0;
+        cx.resources.STATUS.pitch = euler_angle.1;
+        cx.resources.STATUS.yaw = euler_angle.2;
+        cx.resources.STATUS.roll_vel = angle_vel[0];
+        cx.resources.STATUS.pitch_vel = angle_vel[1];
+        cx.resources.STATUS.yaw_vel = angle_vel[2];
 
         // Spawn control loop
         cx.spawn.control_algorithm().unwrap();
@@ -433,7 +472,13 @@ const APP: () = {
 
     /// Interrupt handlers used to dispatch software tasks
     extern "C" {
-        fn EXTI0();
+        fn DMA1_CH1();
+        fn DMA1_CH2();
+        fn DMA1_CH3();
+        fn DMA1_CH4();
+        fn DMA1_CH5();
+        fn DMA1_CH6();
+        fn DMA1_CH7();
     }
 };
 

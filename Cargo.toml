@@ -7,10 +7,13 @@ version = "0.1.0"
 
 [dependencies]
 cortex-m = "0.6.3"
+defmt = "0.1.0"
+defmt-rtt = "0.1.0"
 heapless = "0.5.6"
 l3gd20 = "0.3.0"
 lsm303dlhc = "0.2.0"
 nb = "1.0.0"
+panic-probe = {version = "0.1.0", features = ["print-defmt"]}
 
 [dependencies.num-traits]
 default-features = false
@@ -32,26 +35,11 @@ version = "0.5.0"
 [dependencies.cortex-m-rtic]
 version = "0.5.5"
 
-[dependencies.defmt]
-git = "https://github.com/knurling-rs/defmt"
-rev = "3db6b41"
-
-[dependencies.defmt-rtt]
-git = "https://github.com/knurling-rs/defmt"
-rev = "3db6b41"
-
-[dependencies.panic-probe]
-features = ["print-defmt"]
-git = "https://github.com/knurling-rs/probe-run"
-rev = "cbda61d"
-
 [features]
 # set logging levels here
 default = [
   "defmt-default",
 ]
-
-# do NOT modify these features
 defmt-debug = []
 defmt-default = []
 defmt-error = []

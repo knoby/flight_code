@@ -4,6 +4,21 @@ use core::f32::consts::PI;
 
 pub type Vector = nalgebra::Vector3<f32>;
 
+/// Structs holds all information about current status
+#[derive(Debug, Default, Clone, Copy, PartialEq, defmt::Format)]
+pub struct Status {
+    pub roll: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+    pub roll_vel: f32,
+    pub pitch_vel: f32,
+    pub yaw_vel: f32,
+}
+
+/// Structs holds all parameter for the flight controller
+#[derive(Debug, Default, Clone, Copy, PartialEq, defmt::Format)]
+pub struct Parameter {}
+
 /// Commands for the actual flight code from the application
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
 pub enum AppCommand {

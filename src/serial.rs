@@ -39,10 +39,3 @@ pub fn create_tx_rx(mut serial: Serial) -> (SerialTx, SerialRx) {
 
     (tx, rx)
 }
-
-/// Writes all data from given buffer
-pub fn send_message(serial: &mut SerialTx, msg: &[u8]) {
-    for byte in msg.iter() {
-        nb::block!(serial.write(*byte)).ok();
-    }
-}
