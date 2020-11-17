@@ -72,7 +72,7 @@ const APP: () = {
         STATUS: fc::Status,
     }
 
-    #[init(spawn=[state_estimation])]
+    #[init(spawn=[state_estimation, cyclic_status])]
     fn init(mut cx: init::Context) -> init::LateResources {
         //Create Ringbuffer at beginning of init function
         static mut Q_SERIAL_READ: Option<Queue<u8, U32>> = None;
@@ -196,7 +196,7 @@ const APP: () = {
             hal::serial::Serial::usart1(
                 cx.device.USART1,
                 (tx_pin, rx_pin),
-                hal::time::Bps(9600),
+                hal::time::Bps(38400),
                 clocks,
                 &mut rcc.apb2,
             )
@@ -206,6 +206,7 @@ const APP: () = {
 
         // When finished start the periodic tast
         cx.spawn.state_estimation().unwrap();
+        cx.spawn.cyclic_status().unwrap();
 
         //Assign late resources
         init::LateResources {
@@ -294,20 +295,6 @@ const APP: () = {
                             match msg {
                                 copter_com::Message::Ping(_) => {
                                     cx.spawn.serial_send(msg).unwrap();
-                                    let mut status = fc::Status::default();
-                                    cx.resources.STATUS.lock(|val| {
-                                        status = *val;
-                                    });
-                                    let attitude =
-                                        copter_com::Message::Attitude(copter_com::Attitude {
-                                            roll: status.roll,
-                                            pitch: status.pitch,
-                                            yaw: status.yaw,
-                                            roll_speed: status.roll_vel,
-                                            pitch_speed: status.pitch_vel,
-                                            yaw_speed: status.yaw_vel,
-                                        });
-                                    cx.spawn.serial_send(attitude).unwrap();
                                 }
                                 copter_com::Message::Attitude(_) => (),
                             }
@@ -324,6 +311,32 @@ const APP: () = {
     // ====================================================
     // ==== Task for sending data over serial ====
     // ====================================================
+    #[task(priority = 2, resources = [STATUS], spawn = [serial_send], schedule = [cyclic_status])]
+    fn cyclic_status(mut cx: cyclic_status::Context) {
+        // Counter to track number of sendings
+        static mut TIMESTAMP: u32 = 0;
+
+        *TIMESTAMP += 1;
+
+        let mut status = fc::Status::default();
+        cx.resources.STATUS.lock(|val| {
+            status = *val;
+        });
+        let attitude = copter_com::Message::Attitude(copter_com::Attitude {
+            timestamp: *TIMESTAMP,
+            roll: status.roll,
+            pitch: status.pitch,
+            yaw: status.yaw,
+            roll_speed: status.roll_vel,
+            pitch_speed: status.pitch_vel,
+            yaw_speed: status.yaw_vel,
+        });
+        cx.schedule
+            .cyclic_status(cx.scheduled + rtic::cyccnt::Duration::from_cycles(CORE_FREQUENCY / 10))
+            .unwrap();
+        cx.spawn.serial_send(attitude).unwrap();
+    }
+
     #[task(priority = 2, resources = [SERIAL_TX], capacity = 4)]
     fn serial_send(cx: serial_send::Context, msg: copter_com::Message) {
         let buffer = msg.serialize();
