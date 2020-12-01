@@ -65,7 +65,7 @@ impl Motors {
             pwm_rr: ch_rr,
             duty_stop: duty_stop as u16,
             duty_full: duty_full as u16,
-            rate_limit: 200.0,
+            rate_limit: 50.0,
             act_speed: (0.0, 0.0, 0.0, 0.0),
         };
 

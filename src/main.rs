@@ -481,11 +481,11 @@ const APP: () = {
                     fc::SetValues::Stabalize => {
                         FC.stabalize(act_angle, act_angle_vel, STATUS.vert_acc, CONTROL_LOOP_DT)
                     }
+                    fc::SetValues::SequenceTest => FC.sequence_test(CONTROL_LOOP_DT),
                     fc::SetValues::AngleCtrl(_angles) => unimplemented!(),
                 };
 
-                //MOTORS.set_speed(motor_speed, CONTROL_LOOP_DT);
-                MOTORS.set_speed((20.0, 40.0, 60.0, 80.0), CONTROL_LOOP_DT);
+                MOTORS.set_speed(motor_speed, CONTROL_LOOP_DT);
             }
         }
 

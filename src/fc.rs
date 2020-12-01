@@ -54,11 +54,13 @@ pub enum SetValues {
     Stabalize,
     /// Closed loop control for Angles
     AngleCtrl([f32; 3]),
+    /// Sequence Test
+    SequenceTest,
 }
 
 impl Default for SetValues {
     fn default() -> Self {
-        SetValues::Stabalize
+        SetValues::SequenceTest
     }
 }
 
@@ -71,6 +73,9 @@ pub struct FlighController {
     pitch_pos_ctrl: PIDController<f32>,
 
     thrust_ctrl: PIDController<f32>,
+
+    time: f32,
+    motor: MotorSide,
 }
 
 impl Default for FlighController {
@@ -108,6 +113,9 @@ impl Default for FlighController {
             ),
 
             thrust_ctrl: PIDController::new(100.0, None, None, -1000.0, 1000.0, 0.0),
+
+            time: 0.0,
+            motor: MotorSide::FrontLeft,
         }
     }
 }
@@ -177,6 +185,32 @@ impl FlighController {
 
         (fl, fr, rl, rr)
     }
+
+    pub fn sequence_test(&mut self, dt: f32) -> (f32, f32, f32, f32) {
+        self.time += dt;
+        if self.time >= 2.0 {
+            self.time = 0.0;
+            self.motor = match self.motor {
+                MotorSide::FrontLeft => MotorSide::FrontRight,
+                MotorSide::FrontRight => MotorSide::RearLeft,
+                MotorSide::RearLeft => MotorSide::RearRight,
+                MotorSide::RearRight => MotorSide::FrontLeft,
+            };
+        }
+        match self.motor {
+            MotorSide::FrontLeft => (10.0, 0.0, 0.0, 0.0),
+            MotorSide::FrontRight => (0.0, 10.0, 0.0, 0.0),
+            MotorSide::RearLeft => (0.0, 0.0, 10.0, 0.0),
+            MotorSide::RearRight => (0.0, 0.0, 0.0, 10.0),
+        }
+    }
+}
+
+enum MotorSide {
+    FrontLeft,
+    FrontRight,
+    RearLeft,
+    RearRight,
 }
 
 #[allow(non_snake_case)]
