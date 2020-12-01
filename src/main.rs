@@ -47,7 +47,9 @@ const APP: () = {
 
         // Communication to Base Station
         SERIAL_RX: serial::SerialRx,
-        SERIAL_TX: serial::SerialTx,
+        SERIAL_TX: Option<serial::SerialTx>,
+        DMA_SERIAL_TX: Option<serial::SerialTxDMA>,
+        DMA_BUFFER_TX: Option<&'static mut [u8; 32]>,
 
         // Sensor Data
         SENSORS: position::Sensors,
@@ -206,6 +208,13 @@ const APP: () = {
 
         let (tx, rx) = serial::create_tx_rx(serial);
 
+        #[cfg(feature = "serial_usb")]
+        let dma_serial_tx = cx.device.DMA1.split(&mut rcc.ahb).ch4;
+        #[cfg(not(feature = "serial_usb"))]
+        let dma_serial_tx = cx.device.DMA1.split(&mut rcc.ahb).ch7;
+
+        let dma_buffer_tx = cortex_m::singleton!(: [u8;32] = [0; 32]).unwrap();
+
         // When finished start the periodic tast
         cx.spawn.state_estimation().unwrap();
         cx.spawn.cyclic_status().unwrap();
@@ -219,7 +228,11 @@ const APP: () = {
             CONS_APP_CMD: ca,
 
             SERIAL_RX: rx,
-            SERIAL_TX: tx,
+            SERIAL_TX: Some(tx),
+
+            DMA_SERIAL_TX: Some(dma_serial_tx),
+
+            DMA_BUFFER_TX: Some(dma_buffer_tx),
 
             SENSORS: position::Sensors::new(acc_sensor, gyro_sensor, l3gd20::Scale::Dps2000),
             MOTORS: motors::Motors::new(
@@ -338,12 +351,30 @@ const APP: () = {
         cx.spawn.serial_send(attitude).unwrap();
     }
 
-    #[task(priority = 2, resources = [SERIAL_TX], capacity = 4)]
+    #[task(priority = 2, resources = [SERIAL_TX, DMA_SERIAL_TX, DMA_BUFFER_TX], capacity = 4)]
     fn serial_send(cx: serial_send::Context, msg: copter_com::Message) {
+        // Take ownership of resources
+        let serial = cx.resources.SERIAL_TX.take().unwrap();
+        let dma = cx.resources.DMA_SERIAL_TX.take().unwrap();
+        let dma_buffer = cx.resources.DMA_BUFFER_TX.take().unwrap();
+
+        // Serialize message
         let buffer = msg.serialize();
-        for byte in buffer.iter() {
-            nb::block!(cx.resources.SERIAL_TX.write(*byte)).unwrap();
+
+        // Clear buffer
+        for byte in dma_buffer.iter_mut() {
+            *byte = 0;
         }
+        // Set message
+        for (msg_byte, buffer_byte) in buffer.iter().zip(dma_buffer.iter_mut()) {
+            *buffer_byte = *msg_byte;
+        }
+
+        let (dma_buffer, dma, serial) = serial.write_all(dma_buffer, dma).wait();
+
+        *cx.resources.SERIAL_TX = Some(serial);
+        *cx.resources.DMA_BUFFER_TX = Some(dma_buffer);
+        *cx.resources.DMA_SERIAL_TX = Some(dma);
     }
 
     // ====================================================

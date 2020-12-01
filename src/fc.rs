@@ -147,7 +147,6 @@ impl FlighController {
         let y_set = self.yaw_vel_ctrl.calc_next_output(act_vel[2], dt);
 
         self.thrust_ctrl.setpoint = 0.0;
-        defmt::debug!("{:?}", vertical_acc);
         let thrust = self.thrust_ctrl.calc_next_output(vertical_acc, dt);
 
         let force = Self::motor_mixer((r_set, p_set, y_set, thrust));

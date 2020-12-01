@@ -21,6 +21,11 @@ use serial_bt as serial_types;
 #[cfg(feature = "serial_usb")]
 use serial_usb as serial_types;
 
+#[cfg(feature = "serial_usb")]
+pub type SerialTxDMA = hal::dma::dma1::C4;
+#[cfg(not(feature = "serial_usb"))]
+pub type SerialTxDMA = hal::dma::dma1::C7;
+
 use serial_types::*;
 
 pub type SerialTx = hal::serial::Tx<SerialUart>;
