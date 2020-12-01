@@ -10,6 +10,8 @@ type PwmRL = hal::pwm::PwmChannel<hal::pwm::TIM3_CH3, hal::pwm::WithPins>;
 type PwmRR = hal::pwm::PwmChannel<hal::pwm::TIM3_CH4, hal::pwm::WithPins>;
 type Timer = hal::stm32::TIM3;
 
+const PWM_FREQ: u32 = 50; // [Hz]
+
 pub struct Motors {
     armed: bool,
     pwm_fl: PwmFL,
@@ -35,7 +37,7 @@ impl Motors {
         // Arm/Stop HIGH < 1060us
         // Full Power 1860us
 
-        let (ch_fl, ch_fr, ch_rl, ch_rr) = hal::pwm::tim3(timer, 20_000, 50.hz(), &clocks);
+        let (ch_fl, ch_fr, ch_rl, ch_rr) = hal::pwm::tim3(timer, 20_000, PWM_FREQ.hz(), &clocks);
 
         // Config PWM Pins
         let mut ch_fl = ch_fl.output_to_pc6(fl);
@@ -45,8 +47,9 @@ impl Motors {
 
         // Calculate duty
         let duty_max = ch_fl.get_max_duty() as f32;
-        let duty_stop = duty_max / 10_000.0 * 1060.0;
-        let duty_full = duty_max / 10_000.0 * 1860.0;
+        let pwm_period = 1.0 / PWM_FREQ as f32 * 1_000_000.0;
+        let duty_stop = duty_max / pwm_period * 1060.0;
+        let duty_full = duty_max / pwm_period * 1860.0;
 
         // Enable PWM
         ch_fl.enable();
