@@ -2,6 +2,8 @@ use hal::gpio::PushPull;
 
 use defmt::debug;
 
+use num_traits::float::FloatCore;
+
 /// I2C Configuration
 type I2cSclPin = hal::gpio::gpiob::PB6<hal::gpio::AF4>;
 type I2cSdaPin = hal::gpio::gpiob::PB7<hal::gpio::AF4>;
@@ -26,11 +28,13 @@ type Vector = nalgebra::Vector3<f32>;
 
 pub struct Sensors {
     acc: Lsm303dlhc,
+    acc_z_offset: f32,
     gyro: L3gd20,
     gyro_offset: Vector,
     gyro_scale: l3gd20::Scale,
     angle_vel: Vector,
-    pub angle: nalgebra::UnitQuaternion<f32>,
+    angle: nalgebra::UnitQuaternion<f32>,
+    vert_vel: f32,
 }
 
 impl Sensors {
@@ -42,6 +46,8 @@ impl Sensors {
             gyro_scale,
             angle_vel: Vector::zeros(),
             angle: nalgebra::geometry::UnitQuaternion::identity(),
+            vert_vel: 0.0,
+            acc_z_offset: 0.0,
         };
         sensors.init_sensors();
         sensors
@@ -73,15 +79,19 @@ impl Sensors {
         // 100
         debug!("Collect Data for Gyro Callibration");
         let mut gyro_offset = Vector::zeros();
+        let mut acc_z_offset = 0.0;
         for _ in 0..100 {
             let reading = self.gyro.gyro().unwrap();
             gyro_offset.x += self.gyro_scale.radians(reading.x);
             gyro_offset.y += self.gyro_scale.radians(reading.y);
             gyro_offset.z += self.gyro_scale.radians(reading.z);
+            let reading = self.acc.accel().unwrap();
+            acc_z_offset += reading.z as f32 / 16384.0 * 9.81 * 4.0;
 
             cortex_m::asm::delay(640_000);
         }
         self.gyro_offset = -gyro_offset / 100.0;
+        self.acc_z_offset = acc_z_offset / 100.0;
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -113,7 +123,16 @@ impl Sensors {
 
         // Convert gravity Vector to world frame with estimation of orientation from last cycle
         let mut acc_world = self.angle.transform_vector(&acc_body);
+        // Safe vertical vel
+        let vert_acc = acc_world[2] - self.acc_z_offset;
+        if vert_acc.abs() > 0.2 {
+            self.vert_vel += vert_acc * dt;
+        } else {
+            self.vert_vel *= 0.98;
+        }
+        // Norm
         acc_world /= acc_world.norm();
+
         // Convert mag vector to world frame with estimation of orientation from last cycle
         let mut mag_world = self.angle.transform_vector(&mag_body);
         // Remove z-component/Inclination
@@ -153,5 +172,10 @@ impl Sensors {
     /// Get Euler Angles
     pub fn euler_angles(&self) -> (f32, f32, f32) {
         self.angle.euler_angles()
+    }
+
+    /// Get Vertical acc in world frame
+    pub fn vert_vel(&self) -> f32 {
+        self.vert_vel
     }
 }

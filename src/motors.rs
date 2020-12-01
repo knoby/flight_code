@@ -18,6 +18,8 @@ pub struct Motors {
     pwm_rr: PwmRR,
     duty_stop: u16,
     duty_full: u16,
+    rate_limit: f32,
+    act_speed: (f32, f32, f32, f32),
 }
 
 impl Motors {
@@ -60,6 +62,8 @@ impl Motors {
             pwm_rr: ch_rr,
             duty_stop: duty_stop as u16,
             duty_full: duty_full as u16,
+            rate_limit: 200.0,
+            act_speed: (0.0, 0.0, 0.0, 0.0),
         };
 
         // Disable the Motors
@@ -72,19 +76,35 @@ impl Motors {
     /// Set the rotaion speed of all three Motors.
     /// Allowed values are from 0.0 (Stop), 100.0 (Full Speed)
     /// Values out of this range will be limited to the range
-    pub fn set_speed(&mut self, fl: f32, fr: f32, rl: f32, rr: f32) {
+    pub fn set_speed(&mut self, set_speed: (f32, f32, f32, f32), dt: f32) {
         if self.armed {
-            self.pwm_fl.set_duty(self.speed_to_duty(fl));
-            self.pwm_fr.set_duty(self.speed_to_duty(fr));
-            self.pwm_rl.set_duty(self.speed_to_duty(rl));
-            self.pwm_rr.set_duty(self.speed_to_duty(rr));
+            let limit = self.rate_limit / dt;
+
+            let (set_fl, set_fr, set_rl, set_rr) = set_speed;
+            let (act_fl, act_fr, act_rl, act_rr) = self.act_speed;
+
+            let new_fl = act_fl + (set_fl - act_fl).min(limit).max(-limit);
+            let new_fr = act_fr + (set_fr - act_fr).min(limit).max(-limit);
+            let new_rl = act_rl + (set_rl - act_rl).min(limit).max(-limit);
+            let new_rr = act_rr + (set_rr - act_rr).min(limit).max(-limit);
+
+            self.pwm_fl.set_duty(self.speed_to_duty(new_fl));
+            self.pwm_fr.set_duty(self.speed_to_duty(new_fr));
+            self.pwm_rl.set_duty(self.speed_to_duty(new_rl));
+            self.pwm_rr.set_duty(self.speed_to_duty(new_rr));
+
+            self.act_speed = (new_fl, new_fr, new_rl, new_rr);
         };
+    }
+
+    pub fn get_speed(&self) -> (f32, f32, f32, f32) {
+        self.act_speed
     }
 
     /// Stop the Motors. Syntactic Sugar for motors.set_speed(0.0, 0.0, 0.0, 0.0);
     pub fn stop(&mut self) {
         if self.armed {
-            self.set_speed(0.0, 0.0, 0.0, 0.0);
+            self.set_speed((0.0, 0.0, 0.0, 0.0), 1000.0);
         }
     }
 

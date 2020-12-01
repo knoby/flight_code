@@ -31,6 +31,7 @@ use rtic::app;
 // Program Constants
 const CORE_FREQUENCY: u32 = 64_000_000;
 const CONTROL_LOOP_PERIOD: u32 = CORE_FREQUENCY / 100;
+const CONTROL_LOOP_DT: f32 = 0.01;
 const MOTOR_ARMING_TIME: u32 = CORE_FREQUENCY;
 
 #[app(device = hal::stm32 ,peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
@@ -51,9 +52,6 @@ const APP: () = {
         // Sensor Data
         SENSORS: position::Sensors,
 
-        STATE: fc::State,
-        SETPOINT: fc::SetValues,
-
         // Motor Control
         MOTORS: motors::Motors,
 
@@ -70,6 +68,9 @@ const APP: () = {
         // Parameter and Status
         PARAMETER: fc::Parameter,
         STATUS: fc::Status,
+
+        // Flight ctrl things
+        FLIGHT_CTRL: fc::FlighController,
     }
 
     #[init(spawn=[state_estimation, cyclic_status])]
@@ -101,6 +102,7 @@ const APP: () = {
         let mut gpioa = cx.device.GPIOA.split(&mut rcc.ahb);
         let mut gpiob = cx.device.GPIOB.split(&mut rcc.ahb);
         let mut gpioc = cx.device.GPIOC.split(&mut rcc.ahb);
+        #[cfg(not(feature = "serial_usb"))]
         let mut gpiod = cx.device.GPIOD.split(&mut rcc.ahb);
         let mut gpioe = cx.device.GPIOE.split(&mut rcc.ahb);
 
@@ -229,9 +231,6 @@ const APP: () = {
                 clocks,
             ),
 
-            STATE: fc::State::default(),
-            SETPOINT: fc::SetValues::DirectControl([0.0; 4]),
-
             LED_N: led_n,
             LED_NE: led_ne,
             LED_E: led_e,
@@ -243,6 +242,8 @@ const APP: () = {
 
             PARAMETER: fc::Parameter::default(),
             STATUS: fc::Status::default(),
+
+            FLIGHT_CTRL: fc::FlighController::default(),
         }
     }
 
@@ -252,7 +253,7 @@ const APP: () = {
 
     /// Idle Task for non critical jobs
     #[idle(resources = [CONS_SERIAL_READ, LED_NE, LED_E, STATUS, PROD_APP_CMD], spawn = [serial_send] )]
-    fn idle(mut cx: idle::Context) -> ! {
+    fn idle(cx: idle::Context) -> ! {
         debug!("Entering Idle Task");
         let mut buffer = heapless::Vec::<u8, U32>::new();
         let mut length = None;
@@ -324,12 +325,12 @@ const APP: () = {
         });
         let attitude = copter_com::Message::Attitude(copter_com::Attitude {
             timestamp: *TIMESTAMP,
-            roll: status.roll,
-            pitch: status.pitch,
-            yaw: status.yaw,
-            roll_speed: status.roll_vel,
-            pitch_speed: status.pitch_vel,
-            yaw_speed: status.yaw_vel,
+            roll: status.roll_angle,
+            pitch: status.pitch_angle,
+            yaw: status.yaw_angle,
+            roll_speed: status.roll_angle_vel,
+            pitch_speed: status.pitch_angle_vel,
+            yaw_speed: status.yaw_angle_vel,
         });
         cx.schedule
             .cyclic_status(cx.scheduled + rtic::cyccnt::Duration::from_cycles(CORE_FREQUENCY / 10))
@@ -350,7 +351,7 @@ const APP: () = {
     // ====================================================
 
     /// Task to update the current estimation of the state
-    #[task(priority = 5, resources = [SENSORS, STATE, STATUS], spawn = [control_algorithm], schedule = [state_estimation])]
+    #[task(priority = 5, resources = [SENSORS,  STATUS], spawn = [control_algorithm], schedule = [state_estimation])]
     fn state_estimation(cx: state_estimation::Context) {
         // Calculate new position estimation
         cx.resources
@@ -360,14 +361,16 @@ const APP: () = {
         // Construct estimated state
         let euler_angle = cx.resources.SENSORS.euler_angles();
         let angle_vel = cx.resources.SENSORS.angle_vel();
+        let vert_acc = cx.resources.SENSORS.vert_vel();
 
         // Set Status
-        cx.resources.STATUS.roll = euler_angle.0;
-        cx.resources.STATUS.pitch = euler_angle.1;
-        cx.resources.STATUS.yaw = euler_angle.2;
-        cx.resources.STATUS.roll_vel = angle_vel[0];
-        cx.resources.STATUS.pitch_vel = angle_vel[1];
-        cx.resources.STATUS.yaw_vel = angle_vel[2];
+        cx.resources.STATUS.roll_angle = euler_angle.0;
+        cx.resources.STATUS.pitch_angle = euler_angle.1;
+        cx.resources.STATUS.yaw_angle = euler_angle.2;
+        cx.resources.STATUS.roll_angle_vel = angle_vel[0];
+        cx.resources.STATUS.pitch_angle_vel = angle_vel[1];
+        cx.resources.STATUS.yaw_angle_vel = angle_vel[2];
+        cx.resources.STATUS.vert_acc = vert_acc;
 
         // Spawn control loop
         cx.spawn.control_algorithm().unwrap();
@@ -381,12 +384,18 @@ const APP: () = {
     }
 
     /// Task to calculate the setpoints depending on the chosen control strategie
-    #[task(priority = 5, resources = [MOTORS, STATE, SETPOINT, LED_S, CONS_APP_CMD])]
+    #[task(priority = 5, resources = [MOTORS, LED_S, CONS_APP_CMD, STATUS, PARAMETER, FLIGHT_CTRL])]
     fn control_algorithm(cx: control_algorithm::Context) {
         // Data for handling the current flight controler state
         static mut STATE: fc::ControlState = fc::ControlState::Disabled;
         static mut STATE_OLD: fc::ControlState = fc::ControlState::Disabled;
         static mut CYCLE_COUNT: u32 = 0;
+
+        // De-Structing Resources
+        let MOTORS = cx.resources.MOTORS;
+        let LED = cx.resources.LED_S;
+        let FC = cx.resources.FLIGHT_CTRL;
+        let STATUS = cx.resources.STATUS;
 
         // Handle Commands from Main Application
         while let Some(cmd) = cx.resources.CONS_APP_CMD.dequeue() {
@@ -412,30 +421,44 @@ const APP: () = {
 
         match *STATE {
             fc::ControlState::Disabled => {
-                cx.resources.MOTORS.disable();
-                cx.resources.LED_S.set_low().unwrap();
+                MOTORS.disable();
+                LED.set_low().unwrap();
+                *STATE = fc::ControlState::Arming;
             }
             fc::ControlState::Arming => {
-                cx.resources.MOTORS.enable();
+                MOTORS.enable();
                 if (*CYCLE_COUNT % 10) == 0 {
-                    cx.resources.LED_S.toggle().unwrap();
+                    LED.toggle().unwrap();
                 }
                 if *CYCLE_COUNT >= (MOTOR_ARMING_TIME / CONTROL_LOOP_PERIOD) {
                     *STATE = fc::ControlState::Running;
                 }
             }
             fc::ControlState::Running => {
-                cx.resources.LED_S.set_high().unwrap();
+                LED.set_high().unwrap();
                 // Calculate output depending on given setpoint
-                let _motor_speed = match cx.resources.SETPOINT {
-                    fc::SetValues::DirectControl(_motor_speed) => (),
-                    fc::SetValues::YPRTControl(_yprt) => (),
-                    fc::SetValues::AngleCtrl(_angles) => (),
+                let act_angle = &[STATUS.roll_angle, STATUS.pitch_angle, STATUS.yaw_angle];
+                let act_angle_vel = &[
+                    STATUS.roll_angle_vel,
+                    STATUS.pitch_angle_vel,
+                    STATUS.yaw_angle_vel,
+                ];
+                let motor_speed = match cx.resources.PARAMETER.setpoint {
+                    fc::SetValues::DirectControl(motor_speed) => FC.direct_ctrl(motor_speed),
+
+                    fc::SetValues::YPRTControl(yprt) => FC.yprt_ctrl(yprt),
+                    fc::SetValues::Stabalize => {
+                        FC.stabalize(act_angle, act_angle_vel, STATUS.vert_acc, CONTROL_LOOP_DT)
+                    }
+                    fc::SetValues::AngleCtrl(_angles) => unimplemented!(),
                 };
 
-                cx.resources.MOTORS.set_speed(10.0, 20.0, 30.0, 40.0)
+                MOTORS.set_speed(motor_speed, CONTROL_LOOP_DT);
             }
         }
+
+        // Set Status
+        STATUS.motor_speed = MOTORS.get_speed();
 
         *CYCLE_COUNT = CYCLE_COUNT.wrapping_add(1);
     }

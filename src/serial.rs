@@ -1,5 +1,3 @@
-use hal::prelude::*;
-
 #[cfg(not(feature = "serial_usb"))]
 mod serial_bt {
     pub type SerialTxPin = hal::gpio::gpiod::PD5<hal::gpio::AF7>;
