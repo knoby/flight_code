@@ -303,15 +303,54 @@ const APP: () = {
                 // Check end of message
                 if let Some(len) = length {
                     if (len as u16 + 2) == (buffer.len() as u16) {
+                        // Parse the message from buffer
                         let msg = copter_com::Message::parse(&buffer);
                         debug!("{:?}", msg);
+                        // eval the message and return an answer for the message
                         if let Ok(msg) = msg {
-                            match msg {
-                                copter_com::Message::Ping(_) => {
-                                    cx.spawn.serial_send(msg).unwrap();
+                            let answer = match msg {
+                                copter_com::Message::Ping(_) => msg,
+                                copter_com::Message::EnableMotor => {
+                                    if cx
+                                        .resources
+                                        .PROD_APP_CMD
+                                        .enqueue(fc::AppCommand::EnableMotors)
+                                        .is_ok()
+                                    {
+                                        copter_com::Message::Ack
+                                    } else {
+                                        copter_com::Message::NoAck
+                                    }
                                 }
-                                copter_com::Message::Attitude(_) => (),
-                            }
+                                copter_com::Message::DisableMotor => {
+                                    if cx
+                                        .resources
+                                        .PROD_APP_CMD
+                                        .enqueue(fc::AppCommand::DisableMotors)
+                                        .is_ok()
+                                    {
+                                        copter_com::Message::Ack
+                                    } else {
+                                        copter_com::Message::NoAck
+                                    }
+                                }
+                                copter_com::Message::ChangeSetvalue(setvalue) => {
+                                    if cx
+                                        .resources
+                                        .PROD_APP_CMD
+                                        .enqueue(fc::AppCommand::ChangeSetValue(setvalue))
+                                        .is_ok()
+                                    {
+                                        copter_com::Message::Ack
+                                    } else {
+                                        copter_com::Message::NoAck
+                                    }
+                                }
+                                _ => copter_com::Message::NoAck,
+                            };
+                            // Send answer to message
+                            cx.spawn.serial_send(answer).unwrap();
+                            // Toggle led to indicate a message was processed
                             cx.resources.LED_E.toggle().unwrap()
                         };
                         reciving_msg = false;
@@ -439,6 +478,9 @@ const APP: () = {
                         *STATE = fc::ControlState::Arming;
                     }
                 }
+                fc::AppCommand::ChangeSetValue(set_value) => {
+                    cx.resources.PARAMETER.setpoint = set_value;
+                }
             }
         }
 
@@ -454,7 +496,6 @@ const APP: () = {
             fc::ControlState::Disabled => {
                 MOTORS.disable();
                 LED.set_low().unwrap();
-                *STATE = fc::ControlState::Arming;
             }
             fc::ControlState::Arming => {
                 MOTORS.enable();
@@ -477,7 +518,7 @@ const APP: () = {
                 let motor_speed = match cx.resources.PARAMETER.setpoint {
                     fc::SetValues::DirectControl(motor_speed) => FC.direct_ctrl(motor_speed),
 
-                    fc::SetValues::YPRTControl(yprt) => FC.yprt_ctrl(yprt),
+                    fc::SetValues::PRYTControl(yprt) => FC.yprt_ctrl(yprt),
                     fc::SetValues::Stabalize => {
                         FC.stabalize(act_angle, act_angle_vel, STATUS.vert_acc, CONTROL_LOOP_DT)
                     }
@@ -491,6 +532,7 @@ const APP: () = {
 
         // Set Status
         STATUS.motor_speed = MOTORS.get_speed();
+        STATUS.state = *STATE;
 
         *CYCLE_COUNT = CYCLE_COUNT.wrapping_add(1);
     }

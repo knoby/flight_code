@@ -18,6 +18,7 @@ pub struct Status {
     pub thrust: f32,
     pub motor_speed: (f32, f32, f32, f32),
     pub vert_acc: f32,
+    pub state: ControlState,
 }
 
 /// Structs holds all parameter for the flight controller
@@ -27,14 +28,15 @@ pub struct Parameter {
 }
 
 /// Commands for the actual flight code from the application
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppCommand {
     DisableMotors,
     EnableMotors,
+    ChangeSetValue(SetValues),
 }
 
 /// States for the state machine in the high task
-#[derive(Copy, Clone, PartialEq, defmt::Format)]
+#[derive(Debug, Copy, Clone, PartialEq, defmt::Format)]
 pub enum ControlState {
     /// Motors are disabled
     Disabled,
@@ -44,7 +46,13 @@ pub enum ControlState {
     Running,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, defmt::Format)]
+impl Default for ControlState {
+    fn default() -> Self {
+        ControlState::Disabled
+    }
+}
+
+/*#[derive(Debug, Copy, Clone, PartialEq, defmt::Format)]
 pub enum SetValues {
     /// Set the speed for the motors direct
     DirectControl((f32, f32, f32, f32)),
@@ -56,13 +64,8 @@ pub enum SetValues {
     AngleCtrl([f32; 3]),
     /// Sequence Test
     SequenceTest,
-}
-
-impl Default for SetValues {
-    fn default() -> Self {
-        SetValues::SequenceTest
-    }
-}
+}*/
+pub use copter_com::SetValues;
 
 pub struct FlighController {
     roll_vel_ctrl: PIDController<f32>,
