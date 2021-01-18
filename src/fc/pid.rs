@@ -76,9 +76,13 @@ impl PIDController {
     }
 
     /// Output the next Controll Output
-    pub fn calc_next_output(&mut self, measurement: f32, dt: f32) -> f32 {
+    pub fn calc_next_output(&mut self, set: Option<f32>, act: f32, dt: f32) -> f32 {
+        if let Some(setpoint) = set {
+            self.setpoint = setpoint;
+        }
+
         // Control Error
-        let error = self.setpoint - measurement;
+        let error = self.setpoint - act;
 
         // Proportional Error
         // =====

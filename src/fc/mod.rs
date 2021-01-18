@@ -3,6 +3,8 @@ use num_traits::Float;
 mod pid;
 use pid::*;
 
+type MotorSpeed = (f32, f32, f32, f32);
+
 /// Structs holds all information about current status
 #[derive(Debug, Default, Clone, Copy, PartialEq, defmt::Format)]
 pub struct Status {
@@ -166,14 +168,17 @@ impl FlighController {
         }
     }
 
-    pub fn direct_ctrl(&mut self, motor_speed: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    /// Direct control of the motor speed
+    pub fn direct_ctrl(&mut self, motor_speed: (f32, f32, f32, f32)) -> MotorSpeed {
         motor_speed
     }
 
-    pub fn yprt_ctrl(&mut self, pryt: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    /// Direct control of the yaw pitch roll and thrust force
+    pub fn yprt_ctrl(&mut self, pryt: (f32, f32, f32, f32)) -> MotorSpeed {
         Self::motor_mixer(pryt)
     }
 
+    /// Stablalize with angle = 0 ° and angle_vel = °/s
     pub fn stabalize(
         &mut self,
         act_angle: &[f32; 3],
@@ -181,7 +186,7 @@ impl FlighController {
         vertical_acc: f32,
         dt: f32,
         par: &Parameter,
-    ) -> (f32, f32, f32, f32) {
+    ) -> MotorSpeed {
         // Set Value is zero for stabalize
         let r_angle_set = 0.0;
         let p_angle_set = 0.0;
@@ -189,48 +194,32 @@ impl FlighController {
         // Calculate Angle Controler:
         // - Input Angle [rad]
         // - Output AngleVelocity [rad/s]
-        self.roll_pos_ctrl.setpoint = r_angle_set;
-        self.pitch_pos_ctrl.setpoint = p_angle_set;
 
-        let r_vel_set = self.roll_pos_ctrl.calc_next_output(act_angle[0], dt);
-        let p_vel_set = self.pitch_pos_ctrl.calc_next_output(act_angle[1], dt);
+        let r_vel_set = self
+            .roll_pos_ctrl
+            .calc_next_output(Some(r_angle_set), act_angle[0], dt);
+        let p_vel_set = self
+            .pitch_pos_ctrl
+            .calc_next_output(Some(p_angle_set), act_angle[1], dt);
         let y_vel_set = 0.0; // Setvalue for the yaw is zero
 
-        // Update the setvalue in the controler
-        self.roll_vel_ctrl.setpoint = r_vel_set;
-        self.pitch_vel_ctrl.setpoint = p_vel_set;
-        self.yaw_vel_ctrl.setpoint = y_vel_set;
-
-        // Calculate AngleVelocity Controler
-        // - Input Anglevelocity [rad/s]
-        // - Output AngleAcceleration [rad/s²]
-        let r_set = self.roll_vel_ctrl.calc_next_output(act_vel[0], dt);
-        let p_set = self.pitch_vel_ctrl.calc_next_output(act_vel[1], dt);
-        let y_set = self.yaw_vel_ctrl.calc_next_output(act_vel[2], dt);
+        // Calcualte the angle vel controler
+        let (r_acc_set, p_acc_set, y_acc_set) = self.angle_vel_control_loop(
+            (r_vel_set, p_vel_set, y_vel_set),
+            (act_vel[0], act_vel[1], act_vel[2]),
+            dt,
+        );
 
         // Thrustcontroler for stabalize is controling the vertical acceleration
         // - Input m/s²
         // - Ouptut F
-        self.thrust_ctrl.setpoint = 0.0;
-        let thrust = self.thrust_ctrl.calc_next_output(vertical_acc, dt);
+        let thrust = self.thrust_ctrl.calc_next_output(None, vertical_acc, dt);
 
-        // Force from the three controllers is calculated
-        let f_roll = r_set * par.inertia_x / par.lever_y * par.thrust_fact; // [N]
-        let f_pitch = p_set * par.inertia_y / par.lever_x * par.thrust_fact; // [N]
-        let f_yaw = y_set * par.inertia_z * par.torque_fact * par.torque_fact; // [Nm]
-        let f_thrust = thrust * par.mass * par.thrust_fact; // [N]
-        let force = Self::motor_mixer((f_roll, f_pitch, f_yaw, f_thrust));
-        let mut force = [force.0, force.1, force.2, force.3];
-
-        // The force rises with the power of 2 of the speed.
-        // Prevent sqrt with values smaler than zero
-        // Limit the speed output to max and min speed
-        for f in force.iter_mut() {
-            *f = f.max(0.0).sqrt().min(par.speed_max).max(par.speed_min);
-        }
-        (force[0], force[1], force[2], force[3])
+        // Calcualte motorspeed
+        self.calc_motor_speed((r_acc_set, p_acc_set, y_acc_set), thrust, par)
     }
 
+    /// Resets the PID Controler
     pub fn reset(&mut self) {
         self.roll_pos_ctrl.reset();
         self.pitch_pos_ctrl.reset();
@@ -240,6 +229,7 @@ impl FlighController {
         self.thrust_ctrl.reset();
     }
 
+    /// Mix the force signsals from yaw pitch roll to the signals for the four motors
     fn motor_mixer(rpyt: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
         let (r, p, y, t) = rpyt;
 
@@ -251,7 +241,8 @@ impl FlighController {
         (fl, fr, rl, rr)
     }
 
-    pub fn sequence_test(&mut self, dt: f32) -> (f32, f32, f32, f32) {
+    /// Sequence Test to check rotation of the rotors and correct assignment of the motors on the quadrocopter
+    pub fn sequence_test(&mut self, dt: f32) -> MotorSpeed {
         self.sequence_time += dt;
         if self.sequence_time >= 2.0 {
             self.sequence_time = 0.0;
@@ -268,6 +259,67 @@ impl FlighController {
             MotorSide::RearLeft => (0.0, 0.0, 10.0, 0.0),
             MotorSide::RearRight => (0.0, 0.0, 0.0, 10.0),
         }
+    }
+
+    /// Function to test the PID Tuning of the angle Velocity controllers
+    pub fn pid_angle_vel_test(&mut self, _dt: f32) -> MotorSpeed {
+        unimplemented!()
+    }
+
+    /// Angle Velocity Control Loop
+    /// Returns the angle acceleration for yaw pitch and roll rotation
+    fn angle_vel_control_loop(
+        &mut self,
+        vel_set: (f32, f32, f32),
+        vel_act: (f32, f32, f32),
+        dt: f32,
+    ) -> (f32, f32, f32) {
+        // Deconstruct arguments
+        let (r_vel_set, p_vel_set, y_vel_set) = vel_set;
+        let (r_vel_act, p_vel_act, y_vel_act) = vel_act;
+
+        // Calculate AngleVelocity Controler
+        // - Input Anglevelocity [rad/s]
+        // - Output AngleAcceleration [rad/s²]
+        let r_acc_set = self
+            .roll_vel_ctrl
+            .calc_next_output(Some(r_vel_set), r_vel_act, dt);
+        let p_acc_set = self
+            .pitch_vel_ctrl
+            .calc_next_output(Some(p_vel_set), p_vel_act, dt);
+        let y_acc_set = self
+            .yaw_vel_ctrl
+            .calc_next_output(Some(y_vel_set), y_vel_act, dt);
+
+        // Return accelerations
+        (r_acc_set, p_acc_set, y_acc_set)
+    }
+
+    /// Calculate motorspeed from angle velocity setpoint and thrust setpoint
+    fn calc_motor_speed(
+        &self,
+        acc_set: (f32, f32, f32),
+        thrust: f32,
+        par: &Parameter,
+    ) -> MotorSpeed {
+        // Deconstruct tuple
+        let (r_acc_set, p_acc_set, y_acc_set) = acc_set;
+
+        // Force from the three controllers is calculated
+        let f_roll = r_acc_set * par.inertia_x / par.lever_y * par.thrust_fact; // [N]
+        let f_pitch = p_acc_set * par.inertia_y / par.lever_x * par.thrust_fact; // [N]
+        let f_yaw = y_acc_set * par.inertia_z * par.torque_fact * par.torque_fact; // [Nm]
+        let f_thrust = thrust * par.mass * par.thrust_fact; // [N]
+        let force = Self::motor_mixer((f_roll, f_pitch, f_yaw, f_thrust));
+        let mut force = [force.0, force.1, force.2, force.3];
+
+        // The force rises with the power of 2 of the speed.
+        // Prevent sqrt with values smaler than zero
+        // Limit the speed output to max and min speed
+        for f in force.iter_mut() {
+            *f = f.max(0.0).sqrt().min(par.speed_max).max(par.speed_min);
+        }
+        (force[0], force[1], force[2], force[3])
     }
 }
 
