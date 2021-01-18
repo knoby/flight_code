@@ -20,6 +20,7 @@ use heapless::spsc::{Consumer, Producer, Queue};
 
 // Local modules
 mod fc;
+mod idle_loop;
 mod led;
 mod motors;
 mod position;
@@ -267,98 +268,7 @@ const APP: () = {
     /// Idle Task for non critical jobs
     #[idle(resources = [CONS_SERIAL_READ, LED_NE, LED_E, STATUS, PROD_APP_CMD], spawn = [serial_send] )]
     fn idle(cx: idle::Context) -> ! {
-        debug!("Entering Idle Task");
-        let mut buffer = heapless::Vec::<u8, U32>::new();
-        let mut length = None;
-        let mut reciving_msg = false;
-        loop {
-            while let Some(val) = cx.resources.CONS_SERIAL_READ.dequeue() {
-                cx.resources.LED_NE.toggle().unwrap();
-
-                // wait for start byte
-                if (val == copter_com::START_BYTE) && !reciving_msg {
-                    reciving_msg = true;
-                    length = None;
-                    buffer.clear();
-                }
-
-                // Add byte to buffer
-                if reciving_msg {
-                    buffer.push(val).ok();
-                    let mut raw = [0; 32];
-                    for (i, byte) in buffer.iter().enumerate() {
-                        raw[i] = *byte;
-                    }
-                }
-
-                // Is the length byte?
-                if buffer.len() == 2 {
-                    if val <= 30 {
-                        length = Some(val);
-                    } else {
-                        reciving_msg = false;
-                    }
-                }
-
-                // Check end of message
-                if let Some(len) = length {
-                    if (len as u16 + 2) == (buffer.len() as u16) {
-                        // Parse the message from buffer
-                        let msg = copter_com::Message::parse(&buffer);
-                        debug!("{:?}", msg);
-                        // eval the message and return an answer for the message
-                        if let Ok(msg) = msg {
-                            let answer = match msg {
-                                copter_com::Message::Ping(_) => msg,
-                                copter_com::Message::EnableMotor => {
-                                    if cx
-                                        .resources
-                                        .PROD_APP_CMD
-                                        .enqueue(fc::AppCommand::EnableMotors)
-                                        .is_ok()
-                                    {
-                                        copter_com::Message::Ack
-                                    } else {
-                                        copter_com::Message::NoAck
-                                    }
-                                }
-                                copter_com::Message::DisableMotor => {
-                                    if cx
-                                        .resources
-                                        .PROD_APP_CMD
-                                        .enqueue(fc::AppCommand::DisableMotors)
-                                        .is_ok()
-                                    {
-                                        copter_com::Message::Ack
-                                    } else {
-                                        copter_com::Message::NoAck
-                                    }
-                                }
-                                copter_com::Message::ChangeSetvalue(setvalue) => {
-                                    if cx
-                                        .resources
-                                        .PROD_APP_CMD
-                                        .enqueue(fc::AppCommand::ChangeSetValue(setvalue))
-                                        .is_ok()
-                                    {
-                                        copter_com::Message::Ack
-                                    } else {
-                                        copter_com::Message::NoAck
-                                    }
-                                }
-                                _ => copter_com::Message::NoAck,
-                            };
-                            // Send answer to message
-                            cx.spawn.serial_send(answer).unwrap();
-                            // Toggle led to indicate a message was processed
-                            cx.resources.LED_E.toggle().unwrap()
-                        };
-                        reciving_msg = false;
-                        length = None;
-                    }
-                }
-            }
-        }
+        idle_loop::idle(cx);
     }
 
     // ====================================================
@@ -392,28 +302,7 @@ const APP: () = {
 
     #[task(priority = 2, resources = [SERIAL_TX, DMA_SERIAL_TX, DMA_BUFFER_TX], capacity = 4)]
     fn serial_send(cx: serial_send::Context, msg: copter_com::Message) {
-        // Take ownership of resources
-        let serial = cx.resources.SERIAL_TX.take().unwrap();
-        let dma = cx.resources.DMA_SERIAL_TX.take().unwrap();
-        let dma_buffer = cx.resources.DMA_BUFFER_TX.take().unwrap();
-
-        // Serialize message
-        let buffer = msg.serialize();
-
-        // Clear buffer
-        for byte in dma_buffer.iter_mut() {
-            *byte = 0;
-        }
-        // Set message
-        for (msg_byte, buffer_byte) in buffer.iter().zip(dma_buffer.iter_mut()) {
-            *buffer_byte = *msg_byte;
-        }
-
-        let (dma_buffer, dma, serial) = serial.write_all(dma_buffer, dma).wait();
-
-        *cx.resources.SERIAL_TX = Some(serial);
-        *cx.resources.DMA_BUFFER_TX = Some(dma_buffer);
-        *cx.resources.DMA_SERIAL_TX = Some(dma);
+        serial::serial_send(cx, msg);
     }
 
     // ====================================================
@@ -519,9 +408,13 @@ const APP: () = {
                     fc::SetValues::DirectControl(motor_speed) => FC.direct_ctrl(motor_speed),
 
                     fc::SetValues::PRYTControl(yprt) => FC.yprt_ctrl(yprt),
-                    fc::SetValues::Stabalize => {
-                        FC.stabalize(act_angle, act_angle_vel, STATUS.vert_acc, CONTROL_LOOP_DT)
-                    }
+                    fc::SetValues::Stabalize => FC.stabalize(
+                        act_angle,
+                        act_angle_vel,
+                        STATUS.vert_acc,
+                        CONTROL_LOOP_DT,
+                        cx.resources.PARAMETER,
+                    ),
                     fc::SetValues::SequenceTest => FC.sequence_test(CONTROL_LOOP_DT),
                     fc::SetValues::AngleCtrl(_angles) => unimplemented!(),
                 };

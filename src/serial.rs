@@ -42,3 +42,29 @@ pub fn create_tx_rx(mut serial: Serial) -> (SerialTx, SerialRx) {
 
     (tx, rx)
 }
+
+/// Function called from a task in the app
+pub fn serial_send(cx: crate::serial_send::Context, msg: copter_com::Message) {
+    // Take ownership of resources
+    let serial = cx.resources.SERIAL_TX.take().unwrap();
+    let dma = cx.resources.DMA_SERIAL_TX.take().unwrap();
+    let dma_buffer = cx.resources.DMA_BUFFER_TX.take().unwrap();
+
+    // Serialize message
+    let buffer = msg.serialize();
+
+    // Clear buffer
+    for byte in dma_buffer.iter_mut() {
+        *byte = 0;
+    }
+    // Set message
+    for (msg_byte, buffer_byte) in buffer.iter().zip(dma_buffer.iter_mut()) {
+        *buffer_byte = *msg_byte;
+    }
+
+    let (dma_buffer, dma, serial) = serial.write_all(dma_buffer, dma).wait();
+
+    *cx.resources.SERIAL_TX = Some(serial);
+    *cx.resources.DMA_BUFFER_TX = Some(dma_buffer);
+    *cx.resources.DMA_SERIAL_TX = Some(dma);
+}
